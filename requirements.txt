@@ -1,0 +1,24 @@
+# FastAPI and Web Server
+fastapi==0.115.5
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Data Validation
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# Image Processing
+Pillow==11.0.0
+PyMuPDF==1.24.14
+
+# VLM and LLM
+litellm==1.54.6
+google-generativeai==0.8.3
+
+# Utilities
+loguru==0.7.3
+aiofiles==24.1.0
+python-dotenv==1.0.1
+
+# Optional: For enhanced functionality
+# httpx==0.27.0  # If needed for async HTTP requests
