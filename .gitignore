@@ -25,6 +25,12 @@ data/cropped/
 data/manuals/
 data/processed/
 
+# Downloaded libraries (LDraw parts library - 35k+ files)
+data/ldraw_library/
+
+# LEGO Studio source files (optional - uncomment if you don't want to commit these)
+# data/Lego Studio/
+
 # Test artifacts
 tests/output/
 
