@@ -18,39 +18,32 @@ This refactored version focuses on three core tasks:
 - ✅ Clean, modular architecture
 - ✅ Single VLM model (no fallbacks) for simplicity
 - ✅ JSON file-based storage (no vector database)
+- ✅ URL-based PDF download (direct links, LEGO CDN URLs)
+- ✅ Image folder input with automatic page renaming
+- ✅ Optional image preprocessing (contrast/sharpness enhancement, multi-step page segmentation)
 - ❌ No RAG, embeddings, graph structures, or video analysis
 
 ## Architecture
 
 ```
-Input (PDF/Images) → VLM Extraction → Image Cropping → JSON Output → Frontend Display
+Input (PDF / Image Folder / URL) → VLM Extraction → Image Cropping → JSON Output → Frontend Display
 ```
 
 ## Installation
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
 - Gemini API key
 
 ### Setup
 
-1. Clone and navigate to the project:
+1. Install dependencies:
 ```bash
-cd lego_assembly_refactored
+uv sync
 ```
 
-2. Create virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Configure environment:
+2. Configure environment:
 ```bash
 cp .env.example .env
 # Edit .env and add your GEMINI_API_KEY
@@ -61,16 +54,28 @@ cp .env.example .env
 ### 1. Run the Backend API
 
 ```bash
-python -m backend.main
+uv run python -m backend.main
 ```
 
 The API will be available at `http://localhost:8000`
 
 API Documentation: `http://localhost:8000/docs`
 
+### 1b. Run the Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend will be available at `http://localhost:3000`
+
+Navigate to `http://localhost:3000/ingest` to use the ingestion UI.
+
 ### 2. Process a Manual
 
-**Option A: Via API (Recommended)**
+**Option A: Upload a PDF via API**
 
 ```bash
 curl -X POST "http://localhost:8000/api/ingest/pdf" \
@@ -79,7 +84,25 @@ curl -X POST "http://localhost:8000/api/ingest/pdf" \
   -F "pdf_file=@/path/to/manual.pdf"
 ```
 
-**Option B: Via Python Script**
+**Option B: Provide a URL**
+
+```bash
+curl -X POST "http://localhost:8000/api/ingest/url" \
+  -F "manual_id=6262059" \
+  -F "url=https://www.lego.com/cdn/product-assets/.../6262059.pdf" \
+  -F "instruction_pages=[13,14,15,16,17,18,19,20]"
+```
+
+**Option C: Upload images via API**
+
+```bash
+curl -X POST "http://localhost:8000/api/ingest/images" \
+  -F "manual_id=6262059" \
+  -F "images=@page1.png" \
+  -F "images=@page2.png"
+```
+
+**Option D: Via Python script**
 
 ```python
 from pathlib import Path
@@ -89,10 +112,24 @@ from ingestion.pipeline import IngestionPipeline
 settings = get_settings()
 pipeline = IngestionPipeline(settings)
 
+# From PDF
 result = pipeline.process_manual(
     manual_id="6262059",
     pdf_path=Path("/path/to/manual.pdf"),
     instruction_pages=[13, 14, 15, 16, 17, 18, 19, 20]
+)
+
+# From URL
+result = pipeline.process_url(
+    manual_id="6262059",
+    url="https://www.lego.com/cdn/product-assets/.../6262059.pdf",
+    instruction_pages=[13, 14, 15, 16, 17, 18, 19, 20]
+)
+
+# From image folder — place images in data/manuals/{manual_id}/source/
+result = pipeline.process_image_directory(
+    manual_id="6262059",
+    image_dir=Path("data/manuals/6262059/source/")
 )
 
 print(f"Extracted {len(result.steps)} steps")
@@ -127,30 +164,43 @@ http://localhost:8000/images/6262059/subassemblies/step_1_subassembly_0.png
 lego_assembly_refactored/
 ├── config/              # Configuration management
 ├── ingestion/           # Core processing pipeline
-│   ├── pdf_processor.py
-│   ├── vlm_extractor.py
-│   ├── image_cropper.py
-│   └── pipeline.py
+│   ├── pipeline.py          # Orchestrates all input types
+│   ├── pdf_processor.py     # PDF/image page extraction
+│   ├── url_handler.py       # PDF download from URLs
+│   ├── manual_input_handler.py  # Image preprocessing utilities
+│   ├── vlm_extractor.py     # Gemini VLM step extraction
+│   ├── image_cropper.py     # Bounding box image cropping
+│   └── schemas.py           # Pydantic data models
 ├── backend/             # FastAPI application
 │   ├── routes/          # API endpoints
 │   └── services/        # Business logic
-├── frontend/            # Next.js frontend (to be implemented)
+├── frontend/            # Next.js frontend
+│   ├── app/
+│   │   ├── ingest/      # Ingestion UI (URL or image upload)
+│   │   ├── steps/       # Step viewer
+│   │   └── parts/       # Parts catalog viewer
+│   └── lib/
+│       └── api.ts       # Typed API client
 ├── data/                # Generated data
-│   ├── manuals/         # Uploaded PDFs
+│   ├── manuals/         # Uploaded PDFs and source images
 │   ├── processed/       # JSON outputs
-│   └── cropped/         # Cropped images
-└── prompts/             # VLM prompt templates
+│   └── cropped/         # Cropped part/subassembly images
+├── prompts/             # VLM prompt templates
+├── pyproject.toml       # Project dependencies (managed by uv)
+└── uv.lock              # Locked dependency versions
 ```
 
 ## Data Flow
 
-1. **PDF Upload** → Uploaded to `data/manuals/{manual_id}/`
-2. **Page Extraction** → Pages saved as `page_001.png`, etc.
+1. **Input** → PDF upload, URL download (temp file), or image folder placed in `data/manuals/{manual_id}/`
+2. **Page Extraction** → Pages saved as `page_001.png`, `page_002.png`, etc. in `data/manuals/{manual_id}/`
 3. **VLM Extraction** → Gemini analyzes each page, outputs steps with bounding boxes
 4. **JSON Output** → `data/processed/{manual_id}/extraction.json`
 5. **Image Cropping** → Parts/subassemblies cropped using bounding boxes
 6. **Enhanced JSON** → `data/processed/{manual_id}/enhanced.json` with image paths
 7. **Frontend Access** → API serves data and images
+
+> **Image folder input:** Place your images in any directory and call `process_image_directory()` or `POST /api/ingest/images`. Images are automatically copied to `data/manuals/{manual_id}/` and renamed `page_001.png`, `page_002.png`, etc.
 
 ## Output Format
 
@@ -193,7 +243,7 @@ Edit `.env` to customize:
 
 ### Running Tests
 ```bash
-pytest tests/
+uv run pytest tests/
 ```
 
 ### API Documentation
@@ -215,7 +265,7 @@ Visit `http://localhost:8000/docs` for interactive API documentation (Swagger UI
 
 **Issue: "PyMuPDF not installed"**
 ```bash
-pip install PyMuPDF
+uv add pymupdf
 ```
 
 **Issue: "GEMINI_API_KEY not set"**

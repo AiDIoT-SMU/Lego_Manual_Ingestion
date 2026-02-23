@@ -13,6 +13,7 @@ from .pdf_processor import PDFProcessor
 from .vlm_extractor import VLMExtractor
 from .image_cropper import ImageCropper
 from .schemas import ManualExtraction
+from .url_handler import URLHandler
 
 
 class IngestionPipeline:
@@ -27,7 +28,7 @@ class IngestionPipeline:
         """
         self.settings = settings
 
-        # Load VLM prompt template
+        # Load semantic prompt (Call 1 — text only, no coordinates)
         prompt_path = Path(__file__).parent.parent / "prompts" / "step_extraction.txt"
         with open(prompt_path, 'r') as f:
             self.prompt_template = f.read()
@@ -186,3 +187,33 @@ class IngestionPipeline:
         logger.info(f"✓ Ingestion pipeline complete for manual {manual_id}")
 
         return enhanced
+
+    def process_url(
+        self,
+        manual_id: str,
+        url: str,
+        instruction_pages: Optional[List[int]] = None
+    ) -> ManualExtraction:
+        """
+        Download a PDF manual from a URL and run the ingestion pipeline.
+
+        Downloads the PDF to a temporary directory, runs the standard
+        process_manual pipeline, then cleans up the temporary file.
+
+        Args:
+            manual_id: Unique identifier for this manual
+            url: Direct URL to the PDF manual
+            instruction_pages: List of page numbers to process (1-indexed).
+                              If None, processes all pages.
+
+        Returns:
+            ManualExtraction object with all steps and cropped image paths
+        """
+        logger.info(f"Starting URL ingestion for manual {manual_id}: {url}")
+
+        url_handler = URLHandler()
+        try:
+            pdf_path = url_handler.download_pdf(url)
+            return self.process_manual(manual_id, pdf_path, instruction_pages)
+        finally:
+            url_handler.cleanup()

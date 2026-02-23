@@ -1,128 +1,34 @@
-TASK: Extract ALL assembly steps from this LEGO instruction manual page.
+This is a page from a LEGO instruction manual. It may contain multiple steps.
 
-IMPORTANT: A single page may contain MULTIPLE steps (typically identified by step numbers like "1", "2", "3", "4" in the image). Look carefully and return ALL steps found on this page as a JSON array.
+For EACH step on this page extract the following — DO NOT include any coordinates or bounding boxes:
 
-For EACH step you find, extract:
-1. Step number
-2. Parts required (with BOUNDING BOXES in pixels)
-3. Subassemblies shown (with BOUNDING BOXES in pixels)
-4. Assembly actions to perform
-5. Any special notes or instructions
+1. step_number — the large digit shown in the image (e.g. 1, 2, 3, 4)
+2. parts_required — a list of part descriptions from the parts panel
+   (the small inset box). Each entry is a short string like "tan 2x4 brick (1x)".
+3. subassembly_description — one sentence describing what the assembled model
+   looks like after completing this step.
+4. actions — 1 to 3 concise assembly instructions.
+5. notes — any warnings or tips shown on the page (null if none).
 
-═══════════════════════════════════════════════════════════════
-
-BOUNDING BOX FORMAT (CRITICAL):
-
-For each part and subassembly, provide pixel coordinates of the bounding box that tightly fits around it in the image:
-
-{
-  "description": "red 2x4 brick",
-  "bounding_box": {
-    "x": 100,      // top-left x coordinate (pixels from left edge)
-    "y": 150,      // top-left y coordinate (pixels from top edge)
-    "width": 80,   // width in pixels
-    "height": 60   // height in pixels
-  }
-}
-
-IMPORTANT BOUNDING BOX GUIDELINES:
-- Measure coordinates carefully - they must be accurate for image cropping
-- The bounding box should TIGHTLY fit around the part/subassembly
-- Use the actual pixel dimensions of the image
-- If a part appears multiple times in the same step, create SEPARATE entries with different bounding boxes
-- If you cannot determine precise coordinates, you may omit the bounding_box field for that item
-
-═══════════════════════════════════════════════════════════════
-
-DESCRIPTION FORMAT (CRITICAL):
-
-Part and subassembly descriptions must be SINGLE-LINE strings, NOT objects with separate fields.
-
-GOOD examples:
-✓ "red 2x4 brick"
-✓ "blue flat plate 2x2"
-✓ "yellow sloped piece"
-✓ "wheels assembly with axle"
-✓ "base structure with grey bricks"
-
-BAD examples (DO NOT USE):
-✗ {"color": "red", "shape": "brick", "size": "2x4"}
-✗ {"description": "brick", "color": "red"}
-
-Keep descriptions concise (3-10 words) but specific enough to identify the part.
-
-═══════════════════════════════════════════════════════════════
-
-REQUIRED JSON FORMAT:
-
-Return a JSON ARRAY containing ALL steps found on this page:
+Return ONLY a JSON array in this exact format, no other text:
 
 [
   {
     "step_number": 1,
     "parts_required": [
-      {
-        "description": "red 2x4 brick",
-        "bounding_box": {"x": 100, "y": 150, "width": 80, "height": 60}
-      },
-      {
-        "description": "blue 2x2 plate",
-        "bounding_box": {"x": 200, "y": 160, "width": 50, "height": 40}
-      }
+      {"description": "tan 2x4 brick (1x)"}
     ],
-    "subassemblies": [
-      {
-        "description": "base assembly with wheels",
-        "bounding_box": {"x": 300, "y": 400, "width": 200, "height": 150}
-      }
-    ],
-    "actions": [
-      "Attach red brick to the top of base",
-      "Press firmly until it clicks",
-      "Add blue plate to the right side"
-    ],
-    "notes": "Ensure alignment before pressing"
+    "subassembly_description": "a single tan 2x4 brick lying flat",
+    "actions": ["Place the tan 2x4 brick as the starting piece"],
+    "notes": null
   },
   {
     "step_number": 2,
     "parts_required": [
-      {
-        "description": "yellow sloped piece",
-        "bounding_box": {"x": 120, "y": 180, "width": 60, "height": 50}
-      }
+      {"description": "brown slope 1x2 (2x)"}
     ],
-    "subassemblies": [
-      {
-        "description": "structure from step 1 with added red brick",
-        "bounding_box": {"x": 320, "y": 420, "width": 210, "height": 160}
-      }
-    ],
-    "actions": [
-      "Place yellow slope on top",
-      "Align with the back edge"
-    ],
+    "subassembly_description": "tan base brick with two brown slopes on top",
+    "actions": ["Attach two brown slopes to the top of the base brick"],
     "notes": null
   }
 ]
-
-═══════════════════════════════════════════════════════════════
-
-SPECIAL INSTRUCTIONS:
-
-1. MULTIPLE STEPS PER PAGE: If the page shows steps 1, 2, 3, and 4, return 4 objects in the array.
-
-2. STEP NUMBERING: Extract the actual step number shown in the image. If no number is visible, infer it from context or leave as null.
-
-3. PARTS vs SUBASSEMBLIES:
-   - Parts: Individual LEGO pieces needed for THIS step
-   - Subassemblies: The assembled result shown (what it looks like after completing the step)
-
-4. ACTIONS: List specific assembly instructions (3-5 actions max per step). Be concise.
-
-5. NOTES: Include any warnings, tips, or special instructions shown. If none, use null.
-
-6. EMPTY FIELDS: If no parts/subassemblies/actions/notes are shown for a step, use empty array [] or null.
-
-═══════════════════════════════════════════════════════════════
-
-Now analyze the provided LEGO instruction page image and extract ALL steps with accurate bounding boxes. Return ONLY the JSON array, no additional text.

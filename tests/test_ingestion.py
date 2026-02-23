@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import get_settings
 from ingestion.pipeline import IngestionPipeline
