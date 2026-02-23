@@ -1,0 +1,19 @@
+This LEGO instruction page contains {n_steps} step(s) in left-to-right order on the page.
+
+For EACH step find EXACTLY TWO bounding boxes:
+
+PARTS PANEL — a small inset rectangle with a blue or light-grey background and a
+dark/black outline, usually in a corner of the page (or its half for multi-step pages),
+containing brick images with quantity labels (1x, 2x, …).
+Label it "parts_0" for the first step, "parts_1" for the second, etc.
+
+SUBASSEMBLY — the main 3D-rendered LEGO model shown OUTSIDE and below/beside the
+parts panel, representing the build state after completing that step.
+Label it "subassembly_0" for the first step, "subassembly_1" for the second, etc.
+
+Ignore: background graphics, page numbers, step-number digits, arrows, decorative
+illustrations, yellow attachment-hint panels.
+
+Never return masks or code fencing.
+Return: [{"box_2d": [ymin, xmin, ymax, xmax], "label": <label>}]
+normalized to 0-1000. Values in box_2d must be integers only.

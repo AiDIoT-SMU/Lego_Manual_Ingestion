@@ -81,27 +81,9 @@ def _image_to_b64(img: PILImage.Image, mime: str = "image/png") -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _build_spatial_prompt(n_steps: int) -> str:
-    step_labels = ", ".join(
-        f'"parts_{i}" / "subassembly_{i}"' for i in range(n_steps)
-    )
-    return (
-        f"This LEGO instruction page contains {n_steps} step(s) "
-        f"in left-to-right order on the page.\n\n"
-        "For EACH step find EXACTLY TWO bounding boxes:\n\n"
-        "PARTS PANEL — a small inset rectangle with a blue or light-grey background "
-        "and a dark/black outline, usually in a corner of the page (or its half for "
-        "multi-step pages), containing brick images with quantity labels (1x, 2x, …). "
-        "Label it parts_0 for the first step, parts_1 for the second, etc.\n\n"
-        "SUBASSEMBLY — the main 3D-rendered LEGO model shown OUTSIDE and below/beside "
-        "the parts panel, representing the build state after completing that step. "
-        "Label it subassembly_0 for the first step, subassembly_1 for the second, etc.\n\n"
-        "Ignore: background graphics, page numbers, step-number digits, arrows, "
-        "decorative illustrations, yellow attachment-hint panels.\n\n"
-        "Never return masks or code fencing.\n"
-        f"Return: [{{\"box_2d\": [ymin, xmin, ymax, xmax], \"label\": <one of {step_labels}>}}] "
-        "normalized to 0-1000. Values in box_2d must be integers only."
-    )
+def _build_spatial_prompt(template: str, n_steps: int) -> str:
+    """Inject n_steps into the spatial prompt template loaded from file."""
+    return template.replace("{n_steps}", str(n_steps))
 
 
 # ── main class ───────────────────────────────────────────────────────────────
@@ -116,11 +98,18 @@ class VLMExtractor:
     Results are merged by step index.
     """
 
-    def __init__(self, vlm_model: str, api_key: str, max_retries: int = 3):
+    def __init__(
+        self,
+        vlm_model: str,
+        api_key: str,
+        max_retries: int = 3,
+        spatial_prompt_template: str = "",
+    ):
         self.litellm_model = vlm_model
         # google-genai uses bare model name without the "gemini/" litellm prefix
         self.genai_model = vlm_model.split("/", 1)[-1]
         self.max_retries = max_retries
+        self.spatial_prompt_template = spatial_prompt_template
         self.genai_client = genai.Client(api_key=api_key)
         os.environ["GEMINI_API_KEY"] = api_key
         litellm.drop_params = True
@@ -187,7 +176,7 @@ class VLMExtractor:
 
         # ── Call 2: Spatial ───────────────────────────────────────────────
         logger.debug("  Call 2 — spatial")
-        spatial_prompt = _build_spatial_prompt(n_steps)
+        spatial_prompt = _build_spatial_prompt(self.spatial_prompt_template, n_steps)
         spatial_data = self._spatial_call(img_resized, spatial_prompt)
         logger.debug(f"  Spatial returned {len(spatial_data)} box(es)")
 

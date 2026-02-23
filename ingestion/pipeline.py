@@ -28,16 +28,22 @@ class IngestionPipeline:
         """
         self.settings = settings
 
-        # Load semantic prompt (Call 1 — text only, no coordinates)
-        prompt_path = Path(__file__).parent.parent / "prompts" / "step_extraction.txt"
-        with open(prompt_path, 'r') as f:
+        prompts_dir = Path(__file__).parent.parent / "prompts"
+
+        # Call 1 — semantic prompt (text only, no coordinates)
+        with open(prompts_dir / "step_extraction.txt") as f:
             self.prompt_template = f.read()
+
+        # Call 2 — spatial prompt template (bounding boxes only)
+        with open(prompts_dir / "step_spatial.txt") as f:
+            spatial_prompt_template = f.read()
 
         # Initialize VLM extractor
         self.vlm = VLMExtractor(
             vlm_model=settings.vlm_model,
             api_key=settings.gemini_api_key,
-            max_retries=settings.vlm_max_retries
+            max_retries=settings.vlm_max_retries,
+            spatial_prompt_template=spatial_prompt_template,
         )
 
         logger.info("IngestionPipeline initialized")
