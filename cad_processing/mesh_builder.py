@@ -94,6 +94,44 @@ class MeshBuilder:
         else:
             return trimesh.Scene(meshes)
 
+    def _find_part_file(self, part_id: str) -> Path:
+        """
+        Find the part file, handling various path formats and locations.
+
+        Args:
+            part_id: Part identifier (e.g., "3003.dat", "s\\3003s01.dat")
+
+        Returns:
+            Path to the part file
+        """
+        # Normalize path separators (replace backslash with forward slash)
+        normalized_id = part_id.replace('\\', '/')
+
+        # Try various locations in order
+        search_paths = [
+            # 1. Direct in parts directory
+            self.parts_dir / normalized_id,
+            # 2. In parts directory without any subdirectory prefix
+            self.parts_dir / Path(normalized_id).name,
+            # 3. In primitives directory (p/)
+            self.parts_dir.parent / 'p' / normalized_id,
+            self.parts_dir.parent / 'p' / Path(normalized_id).name,
+            # 4. Relative to ldraw root (for paths like "s/3003s01.dat")
+            self.ldraw_library / normalized_id,
+        ]
+
+        # Try each path
+        for path in search_paths:
+            if path.exists():
+                return path
+
+        # If still not found, raise error with helpful message
+        raise FileNotFoundError(
+            f"Part not found: {part_id}\n"
+            f"Normalized: {normalized_id}\n"
+            f"Tried: {[str(p) for p in search_paths]}"
+        )
+
     def _load_part_geometry(self, part_id: str) -> Tuple[np.ndarray, np.ndarray]:
         """
         Load part geometry from LDraw library with recursive sub-part loading.
@@ -105,23 +143,12 @@ class MeshBuilder:
         if part_id in self.cache:
             return self.cache[part_id]
 
-        part_path = self.parts_dir / part_id
-
-        # Also check primitives and parts/s subdirectories
-        if not part_path.exists():
-            # Try primitives directory (p/)
-            part_path = self.parts_dir.parent / 'p' / part_id
-        if not part_path.exists():
-            # Try sub-parts directory (parts/s/)
-            part_path = self.parts_dir / 's' / part_id
-        if not part_path.exists():
-            # Try with backslash path (Windows-style in LDraw files)
-            if '\\' in part_id:
-                clean_id = part_id.replace('\\', '/')
-                part_path = self.parts_dir.parent / clean_id
-
-        if not part_path.exists():
-            raise FileNotFoundError(f"Part not found: {part_id}")
+        # Find the part file
+        try:
+            part_path = self._find_part_file(part_id)
+        except FileNotFoundError as e:
+            # Not critical - some sub-parts are optional
+            raise e
 
         vertices = []
         faces = []
@@ -141,8 +168,10 @@ class MeshBuilder:
                 # Type 1: Sub-file reference (RECURSIVE!)
                 if line_type == '1':
                     try:
-                        # Parse transformation
                         # Format: 1 <color> <x> <y> <z> <a> <b> <c> <d> <e> <f> <g> <h> <i> <file>
+                        if len(tokens) < 15:
+                            continue
+
                         sub_part_id = tokens[14]
 
                         # Position
@@ -160,25 +189,30 @@ class MeshBuilder:
                         ])
 
                         # Recursively load sub-part
-                        sub_vertices, sub_faces = self._load_part_geometry(sub_part_id)
+                        try:
+                            sub_vertices, sub_faces = self._load_part_geometry(sub_part_id)
 
-                        # Transform sub-part vertices
-                        transformed_verts = self._apply_transform(
-                            sub_vertices,
-                            rotation,
-                            position
-                        )
+                            # Transform sub-part vertices
+                            transformed_verts = self._apply_transform(
+                                sub_vertices,
+                                rotation,
+                                position
+                            )
 
-                        # Add to current part with face index offset
-                        idx_offset = len(vertices)
-                        vertices.extend(transformed_verts.tolist())
+                            # Add to current part with face index offset
+                            idx_offset = len(vertices)
+                            vertices.extend(transformed_verts.tolist())
 
-                        # Offset face indices
-                        offset_faces = sub_faces + idx_offset
-                        faces.extend(offset_faces.tolist())
+                            # Offset face indices
+                            offset_faces = sub_faces + idx_offset
+                            faces.extend(offset_faces.tolist())
 
-                    except (IndexError, ValueError, FileNotFoundError) as e:
-                        # Skip problematic sub-parts (optional parts, etc.)
+                        except FileNotFoundError:
+                            # Sub-part not found - skip silently
+                            pass
+
+                    except (IndexError, ValueError) as e:
+                        # Skip problematic sub-parts
                         pass
 
                 # Type 3: Triangle
