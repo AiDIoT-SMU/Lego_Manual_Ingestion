@@ -106,7 +106,6 @@ def build_digital_twin(
                 # Link to brick library
                 "geometry_reference": {
                     "mesh_file": library_entry["mesh_file"],
-                    "point_cloud_file": library_entry["point_cloud_file"],
                     "library_key": library_key
                 }
             }

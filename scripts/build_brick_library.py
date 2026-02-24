@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cad_processing.ldraw_parser import LDrawParser
 from cad_processing.mesh_builder import MeshBuilder
-from cad_processing.point_cloud_generator import PointCloudGenerator
 
 
 def scan_unique_parts(input_dir: Path, ldraw_library: Path) -> dict:
@@ -46,8 +45,7 @@ def scan_unique_parts(input_dir: Path, ldraw_library: Path) -> dict:
 def build_brick_library(
     unique_parts: dict,
     output_dir: Path,
-    ldraw_library: Path,
-    num_points: int = 10000
+    ldraw_library: Path
 ):
     """
     Build 3D models for each unique part type.
@@ -56,16 +54,12 @@ def build_brick_library(
         unique_parts: Dict of part_id -> list of color_ids
         output_dir: Output directory for brick library
         ldraw_library: Path to LDraw library
-        num_points: Points per point cloud
     """
     mesh_builder = MeshBuilder(ldraw_library)
-    pcd_generator = PointCloudGenerator()
 
     # Create output directories
     meshes_dir = output_dir / "meshes"
-    pcd_dir = output_dir / "point_clouds"
     meshes_dir.mkdir(parents=True, exist_ok=True)
-    pcd_dir.mkdir(parents=True, exist_ok=True)
 
     library_metadata = {
         "parts": {}
@@ -102,28 +96,14 @@ def build_brick_library(
                 mesh_path = meshes_dir / mesh_filename
                 mesh.export(str(mesh_path))
 
-                # Generate point cloud
-                pcd = pcd_generator.mesh_to_point_cloud(
-                    mesh,
-                    num_points=num_points,
-                    use_poisson=True
-                )
-
-                # Save point cloud
-                pcd_filename = f"{part_name}_c{color_id}.pcd"
-                pcd_path = pcd_dir / pcd_filename
-                pcd_generator.save_point_cloud(pcd, pcd_path)
-
                 # Store metadata
                 key = f"{part_id}_{color_id}"
                 library_metadata["parts"][key] = {
                     "part_id": part_id,
                     "color_id": color_id,
                     "mesh_file": mesh_filename,
-                    "point_cloud_file": pcd_filename,
                     "vertices": len(mesh.vertices),
-                    "faces": len(mesh.faces),
-                    "points": len(pcd.points)
+                    "faces": len(mesh.faces)
                 }
 
                 print(f"  ✓ {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
@@ -140,7 +120,6 @@ def build_brick_library(
     print(f"\n✓ Brick library created!")
     print(f"  Parts processed: {len(library_metadata['parts'])}")
     print(f"  Meshes: {meshes_dir}")
-    print(f"  Point clouds: {pcd_dir}")
     print(f"  Metadata: {metadata_path}")
 
 
