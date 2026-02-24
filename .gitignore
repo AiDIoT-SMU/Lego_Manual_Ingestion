@@ -25,6 +25,15 @@ data/cropped/
 data/manuals/
 data/processed/
 
+# Generated brick library (meshes and point clouds - can be rebuilt)
+data/brick_library/
+
+# Downloaded libraries (LDraw parts library - 35k+ files)
+data/ldraw_library/
+
+# LEGO Studio source files (optional - uncomment if you don't want to commit these)
+# data/Lego Studio/
+
 # Test artifacts
 tests/output/
 
