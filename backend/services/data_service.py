@@ -207,3 +207,61 @@ class DataService:
             "manual_id": manual_id,
             "subassemblies": subassemblies
         }
+
+    def get_digital_twin(self, manual_id: str) -> Dict[str, Any]:
+        """
+        Get digital twin data for all steps of a manual.
+
+        Args:
+            manual_id: Manual identifier
+
+        Returns:
+            Dictionary with digital twin data:
+            {
+                "manual_id": str,
+                "steps": [
+                    {
+                        "step_number": int,
+                        "step_name": str,
+                        "num_bricks": int,
+                        "bricks": [...]
+                    }
+                ]
+            }
+
+        Raises:
+            HTTPException: If manual not found or digital twin data doesn't exist
+        """
+        digital_twin_dir = self.settings.processed_dir / manual_id / "digital_twin"
+
+        if not digital_twin_dir.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Digital twin data not found for manual '{manual_id}'"
+            )
+
+        # Load all step files
+        steps_data = []
+        step_files = sorted(digital_twin_dir.glob("step*.json"))
+
+        if not step_files:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No digital twin step files found for manual '{manual_id}'"
+            )
+
+        for step_file in step_files:
+            try:
+                with open(step_file, 'r') as f:
+                    step_data = json.load(f)
+                    steps_data.append(step_data)
+            except Exception as e:
+                logger.error(f"Failed to load digital twin step {step_file.name}: {e}")
+
+        # Sort by step number
+        steps_data.sort(key=lambda x: x.get("step_number", 999))
+
+        return {
+            "manual_id": manual_id,
+            "steps": steps_data
+        }
