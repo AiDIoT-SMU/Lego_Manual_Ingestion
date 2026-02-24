@@ -96,7 +96,7 @@ class MeshBuilder:
 
     def _load_part_geometry(self, part_id: str) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Load part geometry from LDraw library.
+        Load part geometry from LDraw library with recursive sub-part loading.
 
         Returns:
             Tuple of (vertices, faces)
@@ -106,23 +106,83 @@ class MeshBuilder:
             return self.cache[part_id]
 
         part_path = self.parts_dir / part_id
+
+        # Also check primitives and parts/s subdirectories
+        if not part_path.exists():
+            # Try primitives directory (p/)
+            part_path = self.parts_dir.parent / 'p' / part_id
+        if not part_path.exists():
+            # Try sub-parts directory (parts/s/)
+            part_path = self.parts_dir / 's' / part_id
+        if not part_path.exists():
+            # Try with backslash path (Windows-style in LDraw files)
+            if '\\' in part_id:
+                clean_id = part_id.replace('\\', '/')
+                part_path = self.parts_dir.parent / clean_id
+
         if not part_path.exists():
             raise FileNotFoundError(f"Part not found: {part_id}")
 
         vertices = []
         faces = []
 
-        with open(part_path, 'r') as f:
+        with open(part_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('0'):
                     continue
 
                 tokens = line.split()
+                if len(tokens) < 2:
+                    continue
+
                 line_type = tokens[0]
 
+                # Type 1: Sub-file reference (RECURSIVE!)
+                if line_type == '1':
+                    try:
+                        # Parse transformation
+                        # Format: 1 <color> <x> <y> <z> <a> <b> <c> <d> <e> <f> <g> <h> <i> <file>
+                        sub_part_id = tokens[14]
+
+                        # Position
+                        position = np.array([
+                            float(tokens[2]),
+                            float(tokens[3]),
+                            float(tokens[4])
+                        ])
+
+                        # Rotation matrix (3x3)
+                        rotation = np.array([
+                            [float(tokens[5]), float(tokens[6]), float(tokens[7])],
+                            [float(tokens[8]), float(tokens[9]), float(tokens[10])],
+                            [float(tokens[11]), float(tokens[12]), float(tokens[13])]
+                        ])
+
+                        # Recursively load sub-part
+                        sub_vertices, sub_faces = self._load_part_geometry(sub_part_id)
+
+                        # Transform sub-part vertices
+                        transformed_verts = self._apply_transform(
+                            sub_vertices,
+                            rotation,
+                            position
+                        )
+
+                        # Add to current part with face index offset
+                        idx_offset = len(vertices)
+                        vertices.extend(transformed_verts.tolist())
+
+                        # Offset face indices
+                        offset_faces = sub_faces + idx_offset
+                        faces.extend(offset_faces.tolist())
+
+                    except (IndexError, ValueError, FileNotFoundError) as e:
+                        # Skip problematic sub-parts (optional parts, etc.)
+                        pass
+
                 # Type 3: Triangle
-                if line_type == '3':
+                elif line_type == '3' and len(tokens) >= 11:
                     v1 = [float(tokens[2]), float(tokens[3]), float(tokens[4])]
                     v2 = [float(tokens[5]), float(tokens[6]), float(tokens[7])]
                     v3 = [float(tokens[8]), float(tokens[9]), float(tokens[10])]
@@ -132,7 +192,7 @@ class MeshBuilder:
                     faces.append([idx, idx+1, idx+2])
 
                 # Type 4: Quad (split into two triangles)
-                elif line_type == '4':
+                elif line_type == '4' and len(tokens) >= 14:
                     v1 = [float(tokens[2]), float(tokens[3]), float(tokens[4])]
                     v2 = [float(tokens[5]), float(tokens[6]), float(tokens[7])]
                     v3 = [float(tokens[8]), float(tokens[9]), float(tokens[10])]
