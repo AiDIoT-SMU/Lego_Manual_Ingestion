@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { fetchDigitalTwin, type DigitalTwin, type Brick } from "@/lib/api";
+
+// Dynamically import the 3D viewer to avoid SSR issues
+const DigitalTwinViewer = dynamic(
+  () => import("@/components/DigitalTwinViewer"),
+  { ssr: false, loading: () => <div className="flex items-center justify-center h-[500px] bg-gray-900 rounded-lg border border-gray-700"><p className="text-gray-500 text-sm">Loading 3D viewer...</p></div> }
+);
 
 // Color mapping for LEGO color IDs (common colors)
 const LEGO_COLORS: Record<number, string> = {
@@ -181,11 +188,25 @@ export default function DigitalTwinDetailPage({
 
                 {/* Step content - collapsible */}
                 {isExpanded && (
-                  <div className="p-5">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {step.bricks.map((brick) => (
-                        <BrickCard key={brick.brick_id} brick={brick} />
-                      ))}
+                  <div className="p-5 space-y-5">
+                    {/* 3D Visualization */}
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                        3D Visualization
+                      </h3>
+                      <DigitalTwinViewer bricks={step.bricks} height={500} />
+                    </div>
+
+                    {/* Brick Details */}
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                        Brick Details
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {step.bricks.map((brick) => (
+                          <BrickCard key={brick.brick_id} brick={brick} />
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}

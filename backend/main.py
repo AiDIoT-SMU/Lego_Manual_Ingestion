@@ -44,6 +44,19 @@ if settings.cropped_dir.exists():
 else:
     logger.warning(f"Cropped images directory does not exist: {settings.cropped_dir}")
 
+# Mount brick library meshes for 3D visualization
+# Meshes are served at /meshes/*.obj
+brick_meshes_dir = settings.brick_library_dir / "meshes"
+if brick_meshes_dir.exists():
+    app.mount(
+        "/meshes",
+        StaticFiles(directory=str(brick_meshes_dir)),
+        name="meshes"
+    )
+    logger.info(f"Mounted static files at /meshes -> {brick_meshes_dir}")
+else:
+    logger.warning(f"Brick library meshes directory does not exist: {brick_meshes_dir}")
+
 # Include routers
 app.include_router(
     ingestion.router,
