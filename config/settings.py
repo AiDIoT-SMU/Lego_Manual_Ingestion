@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     manual_dir: Path = Path("./data/manuals")
     processed_dir: Path = Path("./data/processed")
     cropped_dir: Path = Path("./data/cropped")
+    brick_library_dir: Path = Path("./data/brick_library")
 
     # Backend Configuration
     api_host: str = "0.0.0.0"
@@ -35,6 +36,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"  # Allow extra fields in .env for future use
 
 
 # Singleton instance

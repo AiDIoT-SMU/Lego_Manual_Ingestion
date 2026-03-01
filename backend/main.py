@@ -10,7 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 from config.settings import get_settings
-from backend.routes import ingestion, steps, parts
+from backend.routes import ingestion, steps, parts, digital_twin
 
 
 # Initialize settings
@@ -44,6 +44,19 @@ if settings.cropped_dir.exists():
 else:
     logger.warning(f"Cropped images directory does not exist: {settings.cropped_dir}")
 
+# Mount brick library meshes for 3D visualization
+# Meshes are served at /meshes/*.obj
+brick_meshes_dir = settings.brick_library_dir / "meshes"
+if brick_meshes_dir.exists():
+    app.mount(
+        "/meshes",
+        StaticFiles(directory=str(brick_meshes_dir)),
+        name="meshes"
+    )
+    logger.info(f"Mounted static files at /meshes -> {brick_meshes_dir}")
+else:
+    logger.warning(f"Brick library meshes directory does not exist: {brick_meshes_dir}")
+
 # Include routers
 app.include_router(
     ingestion.router,
@@ -59,6 +72,11 @@ app.include_router(
     parts.router,
     prefix="/api",
     tags=["Parts"]
+)
+app.include_router(
+    digital_twin.router,
+    prefix="/api",
+    tags=["Digital Twin"]
 )
 
 

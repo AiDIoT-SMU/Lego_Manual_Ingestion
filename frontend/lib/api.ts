@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +52,41 @@ export interface PartsCatalog {
   parts: PartCatalogEntry[];
 }
 
+export interface BrickGeometryReference {
+  mesh_file: string;
+  point_cloud_file: string;
+  library_key: string;
+}
+
+export interface RotationAngles {
+  roll_deg: number;
+  pitch_deg: number;
+  yaw_deg: number;
+}
+
+export interface Brick {
+  brick_id: number;
+  part_number: string;
+  color_id: number;
+  position: [number, number, number];
+  rotation_matrix: [[number, number, number], [number, number, number], [number, number, number]];
+  pose_4x4: [[number, number, number, number], [number, number, number, number], [number, number, number, number], [number, number, number, number]];
+  rotation_angles_deg: RotationAngles;
+  geometry_reference: BrickGeometryReference;
+}
+
+export interface DigitalTwinStep {
+  step_number: number;
+  step_name: string;
+  num_bricks: number;
+  bricks: Brick[];
+}
+
+export interface DigitalTwin {
+  manual_id: string;
+  steps: DigitalTwinStep[];
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
@@ -85,6 +120,12 @@ export async function fetchSteps(manualId: string): Promise<ManualSteps> {
 export async function fetchParts(manualId: string): Promise<PartsCatalog> {
   const res = await fetch(`${API_BASE}/api/manuals/${manualId}/parts`);
   if (!res.ok) throw new Error(`Failed to fetch parts: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchDigitalTwin(manualId: string): Promise<DigitalTwin> {
+  const res = await fetch(`${API_BASE}/api/manuals/${manualId}/digital-twin`);
+  if (!res.ok) throw new Error(`Failed to fetch digital twin: ${res.status}`);
   return res.json();
 }
 
