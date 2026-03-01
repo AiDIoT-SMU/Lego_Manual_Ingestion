@@ -106,6 +106,11 @@ Frontend available at: `http://localhost:3000`
 **Via Web UI:**
 Navigate to `http://localhost:3000/ingest`
 
+Three input modes are available in the UI:
+- **URL** — paste a direct link to a PDF; optionally specify instruction pages (e.g. `13-20, 25`)
+- **Upload PDF** — drag & drop or select a local PDF file; optionally specify instruction pages
+- **Upload Images** — upload individual page images and tag each as Instruction, Final Assembly, or Parts Catalog
+
 **Via API:**
 
 ```bash
