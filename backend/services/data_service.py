@@ -4,8 +4,9 @@ Provides methods to load, query, and aggregate step and part information.
 """
 
 import json
+import re
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
 from fastapi import HTTPException
 
@@ -107,9 +108,31 @@ class DataService:
             detail=f"Step {step_number} not found in manual '{manual_id}'"
         )
 
+    def _parse_part_description(self, raw_desc: str) -> Tuple[str, int]:
+        """
+        Parse part description to extract clean name and quantity.
+
+        Examples:
+            "red brick 2x4 (3x)" → ("red brick 2x4", 3)
+            "tan slope 1x2 (1x)" → ("tan slope 1x2", 1)
+            "blue plate" → ("blue plate", 1)
+
+        Args:
+            raw_desc: Raw part description from extraction
+
+        Returns:
+            Tuple of (clean_description, quantity)
+        """
+        match = re.search(r'^(.+?)\s*\((\d+)x\)$', raw_desc.strip())
+        if match:
+            clean_desc = match.group(1).strip()
+            quantity = int(match.group(2))
+            return (clean_desc, quantity)
+        return (raw_desc.strip(), 1)
+
     def get_parts_catalog(self, manual_id: str) -> Dict[str, Any]:
         """
-        Get a catalog of all unique parts across all steps.
+        Get a catalog of all unique parts across all steps with aggregated quantities.
 
         Args:
             manual_id: Manual identifier
@@ -118,11 +141,13 @@ class DataService:
             Dictionary with parts catalog:
             {
                 "manual_id": str,
+                "total_unique_parts": int,
                 "parts": [
                     {
-                        "description": str,
+                        "description": str,  # Clean description without "(1x)" suffix
                         "images": [str],  # List of cropped image paths
-                        "used_in_steps": [int]  # List of step numbers
+                        "used_in_steps": [int],  # List of step numbers
+                        "total_quantity": int  # Total count across all steps
                     }
                 ]
             }
@@ -132,33 +157,40 @@ class DataService:
         """
         data = self.get_steps(manual_id)
 
-        # Aggregate parts by description
+        # Aggregate parts by clean description
         parts_map: Dict[str, Dict[str, Any]] = {}
 
         for step in data.get("steps", []):
             step_num = step.get("step_number")
 
             for part in step.get("parts_required", []):
-                desc = part.get("description", "")
-                if not desc:
+                raw_desc = part.get("description", "")
+                if not raw_desc:
                     continue
 
+                # Parse description and quantity
+                clean_desc, quantity = self._parse_part_description(raw_desc)
+
                 # Initialize part entry if not exists
-                if desc not in parts_map:
-                    parts_map[desc] = {
-                        "description": desc,
+                if clean_desc not in parts_map:
+                    parts_map[clean_desc] = {
+                        "description": clean_desc,
                         "images": [],
-                        "used_in_steps": []
+                        "used_in_steps": [],
+                        "total_quantity": 0
                     }
+
+                # Add quantity
+                parts_map[clean_desc]["total_quantity"] += quantity
 
                 # Add cropped image if available
                 cropped_path = part.get("cropped_image_path")
-                if cropped_path and cropped_path not in parts_map[desc]["images"]:
-                    parts_map[desc]["images"].append(cropped_path)
+                if cropped_path and cropped_path not in parts_map[clean_desc]["images"]:
+                    parts_map[clean_desc]["images"].append(cropped_path)
 
                 # Add step number if not already added
-                if step_num not in parts_map[desc]["used_in_steps"]:
-                    parts_map[desc]["used_in_steps"].append(step_num)
+                if step_num not in parts_map[clean_desc]["used_in_steps"]:
+                    parts_map[clean_desc]["used_in_steps"].append(step_num)
 
         # Convert to list and sort by first appearance
         parts_list = list(parts_map.values())
@@ -166,6 +198,7 @@ class DataService:
 
         return {
             "manual_id": manual_id,
+            "total_unique_parts": len(parts_list),
             "parts": parts_list
         }
 

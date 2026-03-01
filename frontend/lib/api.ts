@@ -42,13 +42,15 @@ export interface ManualSteps {
 }
 
 export interface PartCatalogEntry {
-  description: string;
-  images: string[];
+  description: string;          // Clean description without "(1x)" suffix
+  images: string[];             // May be empty if detection failed
   used_in_steps: number[];
+  total_quantity: number;       // Total count across all steps
 }
 
 export interface PartsCatalog {
   manual_id: string;
+  total_unique_parts: number;   // Count of unique parts
   parts: PartCatalogEntry[];
 }
 

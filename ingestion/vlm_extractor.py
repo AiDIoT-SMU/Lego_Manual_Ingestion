@@ -81,9 +81,36 @@ def _image_to_b64(img: PILImage.Image, mime: str = "image/png") -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _build_spatial_prompt(template: str, n_steps: int) -> str:
-    """Inject n_steps into the spatial prompt template loaded from file."""
-    return template.replace("{n_steps}", str(n_steps))
+def _build_spatial_prompt(template: str, semantic_data: List[Dict[str, Any]]) -> str:
+    """
+    Inject n_steps and parts list into spatial prompt template.
+
+    Args:
+        template: Spatial prompt template from step_spatial.txt
+        semantic_data: List of step dicts with parts_required
+
+    Returns:
+        Populated prompt string
+    """
+    n_steps = len(semantic_data)
+
+    # Build parts list section
+    parts_lines = ["PARTS BY STEP:"]
+    for i, sem in enumerate(semantic_data):
+        parts = sem.get("parts_required", [])
+        if parts:
+            part_descs = [f'"{p.get("description", "")}"' for p in parts]
+            parts_lines.append(f"Step {i}: {', '.join(part_descs)}")
+        else:
+            parts_lines.append(f"Step {i}: (no parts)")
+
+    parts_list = "\n".join(parts_lines)
+
+    # Replace both placeholders
+    prompt = template.replace("{n_steps}", str(n_steps))
+    prompt = prompt.replace("{parts_list}", parts_list)
+
+    return prompt
 
 
 # ── main class ───────────────────────────────────────────────────────────────
@@ -174,9 +201,9 @@ class VLMExtractor:
         if n_steps == 0:
             return []
 
-        # ── Call 2: Spatial ───────────────────────────────────────────────
-        logger.debug("  Call 2 — spatial")
-        spatial_prompt = _build_spatial_prompt(self.spatial_prompt_template, n_steps)
+        # ── Call 2: Enhanced Spatial (includes individual parts) ──────────
+        logger.debug("  Call 2 — enhanced spatial")
+        spatial_prompt = _build_spatial_prompt(self.spatial_prompt_template, semantic_data)
         spatial_data = self._spatial_call(img_resized, spatial_prompt)
         logger.debug(f"  Spatial returned {len(spatial_data)} box(es)")
 
@@ -226,7 +253,15 @@ class VLMExtractor:
                         thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
-                result = _parse_json(response.text)
+                # response.text concatenates ALL parts including thinking tokens.
+                # Extract only non-thinking parts to avoid passing reasoning text
+                # into the JSON parser.
+                parts = response.candidates[0].content.parts
+                response_text = "".join(
+                    p.text for p in parts
+                    if not getattr(p, "thought", False) and getattr(p, "text", None)
+                )
+                result = _parse_json(response_text)
                 return result if isinstance(result, list) else [result]
 
             except Exception as e:
@@ -253,11 +288,24 @@ class VLMExtractor:
                     model=self.litellm_model,
                     messages=messages,
                     temperature=0.5,
-                    max_tokens=4096,
+                    max_tokens=65535,
                 )
-                text = response.choices[0].message.content
+                msg = response.choices[0].message
+                text = msg.content
                 if text is None:
-                    raise ValueError("VLM returned None content")
+                    finish_reason = response.choices[0].finish_reason
+                    extra_fields = {k: v for k, v in vars(msg).items() if v is not None and k != "content"}
+                    logger.warning(
+                        f"  content=None | finish_reason={finish_reason} | "
+                        f"other fields: {list(extra_fields.keys())} | "
+                        f"usage={response.usage}"
+                    )
+                    if attempt < self.max_retries - 1:
+                        wait = retry_delay * (2 ** attempt)
+                        logger.warning(f"  Semantic call returned None content, retry in {wait}s")
+                        time.sleep(wait)
+                        continue
+                    raise ValueError("VLM returned None content after all retries")
                 return text
             except Exception as e:
                 err = str(e).lower()
@@ -283,11 +331,12 @@ class VLMExtractor:
         """
         Merge semantic text with spatial bounding boxes.
 
-        Semantic steps are in page order (index 0, 1, …).
-        Spatial boxes use labels "parts_0", "subassembly_0", "parts_1", … to
-        identify which step they belong to.
+        Spatial boxes now include:
+        - "parts_panel_X" - entire parts panel for step X (optional, for reference)
+        - "subassembly_X" - subassembly for step X
+        - "step_X_part_Y" - individual part Y in step X
         """
-        # Index spatial boxes by (type, step_index)
+        # Index spatial boxes by label
         boxes: Dict[str, List[int]] = {}
         for item in spatial_data:
             label = item.get("label", "")
@@ -297,17 +346,23 @@ class VLMExtractor:
 
         steps: List[Step] = []
         for i, sem in enumerate(semantic_data):
-            # Parts: one PartInfo per described part, all sharing the panel bbox
-            parts_bbox = boxes.get(f"parts_{i}")
-            bbox_parts = _box2d_to_bbox(parts_bbox, orig_w, orig_h) if parts_bbox else None
+            # Build parts list with individual boxes
+            parts = []
+            for j, p in enumerate(sem.get("parts_required", [])):
+                desc = p.get("description", "")
 
-            parts = [
-                PartInfo(
-                    description=p.get("description", ""),
-                    bounding_box=bbox_parts,
-                )
-                for p in sem.get("parts_required", [])
-            ]
+                # Try to get individual part box first
+                part_label = f"step_{i}_part_{j}"
+                part_bbox = boxes.get(part_label)
+
+                if part_bbox:
+                    # Individual part detected
+                    bbox = _box2d_to_bbox(part_bbox, orig_w, orig_h)
+                else:
+                    # Fallback: no individual box detected, set to None (no image)
+                    bbox = None
+
+                parts.append(PartInfo(description=desc, bounding_box=bbox))
 
             # Subassembly: one entry per step
             sub_bbox = boxes.get(f"subassembly_{i}")
