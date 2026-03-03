@@ -26,8 +26,8 @@ def get_video_enhancer() -> VideoEnhancer:
     """Dependency for video enhancer."""
     settings = Settings()
     vlm_extractor = VLMExtractor(
-        model=settings.vlm_model,
-        api_key=settings.openai_api_key
+        vlm_model=settings.vlm_model,
+        api_key=settings.gemini_api_key
     )
     data_service = DataService()
     return VideoEnhancer(vlm_extractor, data_service, settings)

@@ -150,16 +150,24 @@ class VideoEnhancer:
             # Segment frames into sub-steps based on action changes
             sub_step_segments = self._segment_into_substeps(step_frames)
             logger.info(f"  Segmented into {len(sub_step_segments)} sub-steps")
+            for i, seg in enumerate(sub_step_segments):
+                logger.info(
+                    f"    Sub-step {step_num}.{i+1}: "
+                    f"action={seg['action_type']}, "
+                    f"frames={seg['start_frame']}-{seg['end_frame']}, "
+                    f"parts={seg['parts_involved']}"
+                )
 
             # === VLM CALL TYPE 2: Spatial Extraction ===
             # For each placement sub-step, extract spatial information
             sub_steps = []
             for i, segment in enumerate(sub_step_segments):
                 sub_step_num = f"{step_num}.{i + 1}"
-                logger.info(f"  Processing sub-step {sub_step_num}")
+                logger.info(f"  Processing sub-step {sub_step_num}: {segment['action_type']}")
 
                 spatial_desc = None
                 if segment["action_type"] in ["place", "attach"]:
+                    logger.info(f"    🎯 Placement sub-step detected! Running spatial extraction...")
                     # Run VLM Call Type 2: Spatial Extraction
                     spatial_desc = await self._extract_spatial_info(
                         segment, manual_id, video_id
@@ -312,10 +320,21 @@ class VideoEnhancer:
                     "is_relevant": result.get("is_relevant", True)
                 }
 
+                # Log detailed VLM output for action detection
+                logger.info(
+                    f"  Frame {frame_num} (t={timestamp:.1f}s): "
+                    f"action={frame_action['action_type']}, "
+                    f"parts={frame_action['parts_involved']}, "
+                    f"confidence={frame_action['confidence']:.2f}, "
+                    f"relevant={frame_action['is_relevant']}"
+                )
+                if frame_action['action_type'] in ['place', 'attach']:
+                    logger.warning(f"    ⭐ PLACEMENT FRAME DETECTED: Frame {frame_num}")
+
                 frame_actions.append(frame_action)
 
                 if (i + 1) % 50 == 0:
-                    logger.info(f"  Processed {i + 1}/{len(frames)} frames...")
+                    logger.info(f"  === Processed {i + 1}/{len(frames)} frames ===")
 
             except Exception as e:
                 logger.error(f"Failed to detect action for frame {frame_num}: {e}")
@@ -332,7 +351,16 @@ class VideoEnhancer:
 
         # Filter out irrelevant frames
         relevant_frames = [f for f in frame_actions if f["is_relevant"]]
-        logger.info(f"Filtered to {len(relevant_frames)} relevant frames")
+        irrelevant_count = len(frame_actions) - len(relevant_frames)
+        logger.info(f"Filtered to {len(relevant_frames)} relevant frames ({irrelevant_count} irrelevant frames removed)")
+
+        # Log summary of placement frames
+        placement_frames = [f for f in relevant_frames if f["action_type"] in ["place", "attach"]]
+        logger.info(f"📊 SUMMARY: {len(placement_frames)} PLACEMENT FRAMES detected out of {len(relevant_frames)} relevant frames")
+        for pf in placement_frames[:10]:  # Show first 10
+            logger.info(f"   Frame {pf['frame_number']} (t={pf['timestamp']:.1f}s): {pf['action_type']} - {pf['parts_involved']}")
+        if len(placement_frames) > 10:
+            logger.info(f"   ... and {len(placement_frames) - 10} more placement frames")
 
         return relevant_frames
 
@@ -484,15 +512,24 @@ class VideoEnhancer:
             messages = [{"role": "user", "content": content}]
 
             # Make VLM call
+            logger.info(f"    🔍 VLM CALL 2 (Spatial Extraction) for frame {placement_frame['frame_number']}")
             raw = self.vlm._litellm_with_retry(messages)
             result = _parse_json(raw)
 
+            # Log detailed spatial extraction result
+            logger.info(f"    📍 Spatial Extraction Result:")
+            logger.info(f"       Location: {result.get('location', 'N/A')}")
+            logger.info(f"       Position Detail: {result.get('position_detail', 'N/A')}")
+            logger.info(f"       Orientation: {result.get('orientation', 'N/A')}")
+            logger.info(f"       Relative To: {result.get('relative_to', 'N/A')}")
+            logger.info(f"       Confidence: {result.get('confidence', 0.0):.2f}")
+
             # Check confidence
             if result.get("confidence", 0.0) < 0.5:
-                logger.debug("Low confidence spatial extraction")
+                logger.warning(f"    ⚠️  Low confidence spatial extraction ({result.get('confidence', 0.0):.2f}), skipping")
                 return None
 
-            return {
+            spatial_info = {
                 "target_part": target_part,
                 "placement_part": placement_part,
                 "location": result.get("location", ""),
@@ -500,6 +537,9 @@ class VideoEnhancer:
                 "orientation": result.get("orientation"),
                 "relative_to": result.get("relative_to")
             }
+
+            logger.info(f"    ✅ Spatial extraction successful")
+            return spatial_info
 
         except Exception as e:
             logger.error(f"Spatial extraction failed: {e}")
@@ -590,25 +630,43 @@ class VideoEnhancer:
             messages = [{"role": "user", "content": content}]
 
             # Make VLM call
+            logger.info(f"    🔍 VLM CALL 3 (Reconciliation) for step {manual_step['step_number']}")
+            logger.info(f"       Manual parts: {manual_parts}")
+            logger.info(f"       Video parts: {video_parts}")
             raw = self.vlm._litellm_with_retry(messages)
             result = _parse_json(raw)
+
+            # Log reconciliation result
+            logger.info(f"    🔄 Reconciliation Result:")
+            logger.info(f"       Conflict exists: {result.get('conflict_exists', False)}")
+            logger.info(f"       Video is correct: {result.get('video_is_correct', False)}")
+            logger.info(f"       Incorrect parts: {result.get('incorrect_parts', [])}")
+            logger.info(f"       Correct parts: {result.get('correct_parts', [])}")
+            logger.info(f"       Reason: {result.get('reason', 'N/A')}")
+            logger.info(f"       Confidence: {result.get('confidence', 0.0):.2f}")
 
             corrections = []
 
             if result.get("conflict_exists") and result.get("video_is_correct"):
+                logger.warning(f"    ⚠️  CORRECTION DETECTED for step {manual_step['step_number']}")
                 # Video shows the correct parts
                 for incorrect_part in result.get("incorrect_parts", []):
                     if incorrect_part in missing_in_video:
                         # Find corresponding correct part
                         correct_parts = result.get("correct_parts", [])
                         if correct_parts:
-                            corrections.append({
+                            correction = {
                                 "field": "parts_required",
                                 "original_value": incorrect_part,
                                 "corrected_value": correct_parts[0],
                                 "reason": result.get("reason", "Video evidence contradicts manual"),
                                 "confidence": result.get("confidence", 0.8)
-                            })
+                            }
+                            corrections.append(correction)
+                            logger.info(f"       ✏️  Correction: {incorrect_part} → {correct_parts[0]}")
+
+            if not corrections:
+                logger.info(f"    ✅ No corrections needed for step {manual_step['step_number']}")
 
             return corrections
 
