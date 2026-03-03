@@ -4,7 +4,7 @@ Video Enhancement API Routes: Endpoints for video-enhanced assembly instructions
 Provides endpoints to trigger video enhancement, retrieve enhanced steps, and list enhancements.
 """
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Form, File, UploadFile
 from typing import Dict, List, Any
 from loguru import logger
 
