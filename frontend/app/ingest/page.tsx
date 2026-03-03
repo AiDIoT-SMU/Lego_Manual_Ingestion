@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from "react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type InputMode = "url" | "pdf" | "upload";
+type InputMode = "url" | "pdf" | "upload" | "video";
 type ImageRole = "instruction" | "assembled" | "parts";
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -186,6 +186,73 @@ function PdfDropzone({
   );
 }
 
+function VideoDropzone({
+  onFile,
+  currentFile
+}: {
+  onFile: (file: File) => void;
+  currentFile: File | null;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const files = Array.from(e.dataTransfer.files);
+      const videoFile = files.find(f =>
+        f.type.startsWith("video/") ||
+        /\.(mp4|mov|avi)$/i.test(f.name)
+      );
+      if (videoFile) onFile(videoFile);
+    },
+    [onFile]
+  );
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      onClick={() => inputRef.current?.click()}
+      className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+        dragging ? "border-yellow-400 bg-yellow-400/5" :
+        currentFile ? "border-green-500 bg-green-500/5" :
+        "border-gray-700 hover:border-gray-500"
+      }`}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept="video/mp4,video/quicktime,video/x-msvideo,.mp4,.mov,.avi"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onFile(file);
+          e.target.value = "";
+        }}
+        className="hidden"
+      />
+      {currentFile ? (
+        <div>
+          <p className="text-green-400 text-sm font-medium">✓ {currentFile.name}</p>
+          <p className="text-gray-500 text-xs mt-1">
+            {(currentFile.size / 1024 / 1024).toFixed(2)} MB — click to replace
+          </p>
+        </div>
+      ) : (
+        <div>
+          <p className="text-gray-400 text-sm">
+            Drag & drop a video here, or{" "}
+            <span className="text-yellow-400 underline">click to select</span>
+          </p>
+          <p className="text-gray-600 text-xs mt-1">Supports MP4, MOV, AVI</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function IngestPage() {
@@ -206,6 +273,9 @@ export default function IngestPage() {
 
   // Upload mode
   const [staged, setStaged] = useState<StagedFile[]>([]);
+
+  // Video mode
+  const [videoFile, setVideoFile] = useState<File | null>(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -350,7 +420,7 @@ export default function IngestPage() {
             Input source
           </label>
           <div className="flex rounded-lg overflow-hidden border border-gray-700 w-fit">
-            {(["url", "pdf", "upload"] as InputMode[]).map((m) => (
+            {(["url", "pdf", "upload", "video"] as InputMode[]).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -361,7 +431,7 @@ export default function IngestPage() {
                     : "bg-gray-800 text-gray-400 hover:text-white"
                 }`}
               >
-                {m === "url" ? "URL" : m === "pdf" ? "Upload PDF" : "Upload Images"}
+                {m === "url" ? "URL" : m === "pdf" ? "Upload PDF" : m === "video" ? "Video" : "Upload Images"}
               </button>
             ))}
           </div>

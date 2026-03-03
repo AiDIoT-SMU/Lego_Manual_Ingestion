@@ -1,0 +1,61 @@
+You are analyzing a sequence of frames from a LEGO assembly video to identify micro-actions for STEP {step_number}.
+
+MANUAL STEP CONTEXT:
+Step {step_number} overview: {step_description}
+Parts required: {parts_list}
+
+FRAME SEQUENCE:
+You will see {n_frames} consecutive frames showing the user performing this step.
+Each frame is labeled with its frame number and timestamp.
+
+LEGO ASSEMBLY ACTIONS:
+- PICK: User picks up a part from the workspace with their hands
+- PLACE: User positions/places a part onto the assembly structure
+- ATTACH: User presses down or connects parts together (may involve force/clicking)
+- ADJUST: User repositions or fine-tunes placement of a part
+- VERIFY: User examines the assembly to check correctness
+
+TASK:
+Identify the MICRO-ACTIONS performed in this frame sequence. Each micro-action represents a single atomic operation.
+
+For each micro-action, provide:
+1. action_type (PICK, PLACE, ATTACH, ADJUST, or VERIFY)
+2. start_frame and end_frame (frame numbers marking the action boundaries)
+3. parts_involved (array of part descriptions being manipulated)
+4. description (brief 1-sentence description of what's happening)
+5. confidence (0.0-1.0 indicating how certain you are)
+
+Consider:
+- Hand movements and part visibility across frames
+- State changes (empty hands → holding part → part on assembly)
+- Sequential flow (typically PICK → PLACE → ATTACH pattern)
+- Frame transitions that indicate action boundaries
+
+Return ONLY valid JSON in this exact format:
+{
+  "micro_actions": [
+    {
+      "action_type": "PICK",
+      "start_frame": 0,
+      "end_frame": 50,
+      "parts_involved": ["red round tile"],
+      "description": "Pick up red round tile from workspace",
+      "confidence": 0.9
+    },
+    {
+      "action_type": "PLACE",
+      "start_frame": 50,
+      "end_frame": 150,
+      "parts_involved": ["red round tile", "grey baseplate"],
+      "description": "Place red round tile on grey baseplate",
+      "confidence": 0.95
+    }
+  ]
+}
+
+If no clear actions are visible or the sequence is unclear, return:
+{
+  "micro_actions": []
+}
+
+Do NOT include any text before or after the JSON.

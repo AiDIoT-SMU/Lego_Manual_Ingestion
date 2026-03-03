@@ -423,3 +423,113 @@ class DataService:
         )
 
         return analyses
+
+    def save_video_enhanced_steps(
+        self,
+        manual_id: str,
+        enhanced_data: Dict[str, Any]
+    ) -> None:
+        """
+        Save video-enhanced steps to JSON file.
+
+        Args:
+            manual_id: Manual identifier
+            enhanced_data: Complete video_enhanced.json structure
+
+        Raises:
+            HTTPException: If save fails
+        """
+        output_path = self.settings.processed_dir / manual_id / "video_enhanced.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(output_path, 'w') as f:
+                json.dump(enhanced_data, f, indent=2)
+            logger.info(f"Saved video-enhanced steps to {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to save video-enhanced steps: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save video-enhanced steps: {str(e)}"
+            )
+
+    def get_video_enhanced_steps(self, manual_id: str) -> Dict[str, Any]:
+        """
+        Load video-enhanced steps for a manual.
+
+        Args:
+            manual_id: Manual identifier
+
+        Returns:
+            Complete video_enhanced.json structure
+
+        Raises:
+            HTTPException: If enhancement not found
+        """
+        enhanced_path = self.settings.processed_dir / manual_id / "video_enhanced.json"
+
+        if not enhanced_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No video enhancement found for manual '{manual_id}'"
+            )
+
+        try:
+            with open(enhanced_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load video-enhanced steps: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load video-enhanced steps: {str(e)}"
+            )
+
+    def list_video_enhancements(self, manual_id: str) -> List[Dict[str, Any]]:
+        """
+        List all video-enhanced versions for a manual.
+
+        Currently supports one enhancement per manual (latest video_enhanced.json).
+        Future: Could support multiple enhancements from different videos.
+
+        Args:
+            manual_id: Manual identifier
+
+        Returns:
+            List of enhancement metadata:
+            [
+                {
+                    "video_id": str,
+                    "created_at": str,
+                    "sub_steps_count": int,
+                    "corrections_count": int
+                }
+            ]
+        """
+        enhanced_path = self.settings.processed_dir / manual_id / "video_enhanced.json"
+
+        if not enhanced_path.exists():
+            return []
+
+        try:
+            with open(enhanced_path, 'r') as f:
+                data = json.load(f)
+
+            # Count sub-steps and corrections across all steps
+            sub_steps_count = sum(
+                len(step.get("sub_steps", []))
+                for step in data.get("steps", [])
+            )
+            corrections_count = sum(
+                len(step.get("corrections", []))
+                for step in data.get("steps", [])
+            )
+
+            return [{
+                "video_id": data.get("source_video_id", ""),
+                "created_at": data.get("created_at", ""),
+                "sub_steps_count": sub_steps_count,
+                "corrections_count": corrections_count
+            }]
+        except Exception as e:
+            logger.error(f"Failed to read video enhancement: {e}")
+            return []

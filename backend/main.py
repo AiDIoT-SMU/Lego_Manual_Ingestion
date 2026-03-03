@@ -10,7 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 from config.settings import get_settings
-from backend.routes import ingestion, steps, parts, digital_twin, video
+from backend.routes import ingestion, steps, parts, digital_twin, video, video_enhancement
 
 
 # Initialize settings
@@ -96,6 +96,10 @@ app.include_router(
     video.router,
     prefix="/api/video",
     tags=["Video"]
+)
+app.include_router(
+    video_enhancement.router,
+    tags=["Video Enhancement"]
 )
 
 
