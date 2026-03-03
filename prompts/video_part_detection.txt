@@ -1,0 +1,40 @@
+You are analyzing a frame from a LEGO assembly video to detect which specific parts the user is handling.
+
+PARTS CATALOG FOR THIS MANUAL:
+{parts_list}
+
+REFERENCE IMAGES:
+You will see:
+1. The current VIDEO FRAME showing the user's hands, workspace, and LEGO pieces
+2. REFERENCE IMAGES of each part type from the manual (cropped, individual parts)
+
+TASK:
+Identify which specific parts from the parts catalog are:
+1. Being held in the user's hands
+2. Being placed onto the model
+3. Clearly visible on the workspace (ready to be used)
+
+Match parts by comparing:
+- Color (exact match is important for LEGO)
+- Shape and form factor
+- Size relative to other bricks
+- Stud configuration (number and arrangement of connection points)
+
+Return ONLY valid JSON in this exact format:
+{
+  "detected_parts": [
+    {
+      "description": "exact part description from catalog above",
+      "confidence": <float between 0.0 and 1.0>,
+      "state": "in_hand" | "being_placed" | "on_workspace"
+    }
+  ]
+}
+
+Guidelines:
+- ONLY include parts with confidence > 0.6
+- Use the EXACT description text from the parts catalog above
+- If no parts are clearly visible, return an empty array: {"detected_parts": []}
+- Do NOT make up part descriptions that aren't in the catalog
+
+Do NOT include any text before or after the JSON.

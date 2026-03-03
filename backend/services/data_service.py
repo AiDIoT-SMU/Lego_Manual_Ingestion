@@ -298,3 +298,128 @@ class DataService:
             "manual_id": manual_id,
             "steps": steps_data
         }
+
+    def save_video_analysis(
+        self,
+        manual_id: str,
+        video_id: str,
+        analysis: Dict[str, Any]
+    ) -> None:
+        """
+        Save video analysis results to JSON file.
+
+        Args:
+            manual_id: Manual identifier
+            video_id: Video identifier
+            analysis: Complete video analysis results
+
+        Raises:
+            HTTPException: If save fails
+        """
+        video_dir = self.settings.processed_dir / manual_id / "video_analysis"
+        video_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = video_dir / f"{video_id}_analysis.json"
+
+        try:
+            with open(output_path, 'w') as f:
+                json.dump(analysis, f, indent=2)
+            logger.info(f"Saved video analysis to {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to save video analysis: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save video analysis: {str(e)}"
+            )
+
+    def get_video_analysis(
+        self,
+        manual_id: str,
+        video_id: str
+    ) -> Dict[str, Any]:
+        """
+        Load video analysis results.
+
+        Args:
+            manual_id: Manual identifier
+            video_id: Video identifier
+
+        Returns:
+            Complete video analysis results
+
+        Raises:
+            HTTPException: If analysis not found
+        """
+        analysis_path = (
+            self.settings.processed_dir /
+            manual_id /
+            "video_analysis" /
+            f"{video_id}_analysis.json"
+        )
+
+        if not analysis_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video analysis not found for video '{video_id}' in manual '{manual_id}'"
+            )
+
+        try:
+            with open(analysis_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load video analysis: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load video analysis: {str(e)}"
+            )
+
+    def list_video_analyses(self, manual_id: str) -> List[Dict[str, Any]]:
+        """
+        List all video analyses for a manual.
+
+        Args:
+            manual_id: Manual identifier
+
+        Returns:
+            List of video metadata:
+            [
+                {
+                    "video_id": str,
+                    "filename": str,
+                    "duration_seconds": float,
+                    "processed_at": str
+                }
+            ]
+        """
+        video_dir = self.settings.processed_dir / manual_id / "video_analysis"
+
+        if not video_dir.exists():
+            return []
+
+        analyses = []
+
+        for json_file in video_dir.glob("*_analysis.json"):
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+
+                # Skip error states
+                if data.get("status") == "failed":
+                    continue
+
+                analyses.append({
+                    "video_id": data.get("video_id", ""),
+                    "filename": data.get("video_filename", ""),
+                    "duration_seconds": data.get("total_duration_seconds", 0),
+                    "processed_at": data.get("processed_at", "")
+                })
+            except Exception as e:
+                logger.error(f"Failed to read video analysis {json_file.name}: {e}")
+
+        # Sort by processed_at descending (most recent first)
+        analyses.sort(
+            key=lambda x: x.get("processed_at", ""),
+            reverse=True
+        )
+
+        return analyses

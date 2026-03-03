@@ -190,3 +190,79 @@ export async function ingestImages(
 
   return res.json();
 }
+
+// ─── Video Analysis ────────────────────────────────────────────────────────────
+
+export interface StepTimelineEntry {
+  step_number: number;
+  start_time: number;
+  end_time: number;
+  duration_seconds: number;
+  confidence_avg: number;
+  frame_numbers: number[];
+}
+
+export interface PartUsage {
+  first_seen_timestamp: number;
+  last_seen_timestamp: number;
+  marked_as_used: boolean;
+  usage_confidence: number;
+  frames_visible: number[];
+}
+
+export interface VideoAnalysis {
+  video_id: string;
+  manual_id: string;
+  video_filename: string;
+  total_duration_seconds: number;
+  total_frames_extracted: number;
+  processed_at: string;
+  step_timeline: StepTimelineEntry[];
+  parts_used: Record<string, PartUsage>;
+  frame_analyses: Array<{
+    frame_number: number;
+    timestamp_seconds: number;
+    detected_step: number | null;
+    step_confidence: number;
+    detected_parts: string[];
+    parts_confidence: number;
+  }>;
+}
+
+export async function uploadVideo(
+  manualId: string,
+  videoFile: File
+): Promise<{ video_id: string; status: string; message: string }> {
+  const form = new FormData();
+  form.append("manual_id", manualId);
+  form.append("video_file", videoFile);
+
+  const res = await fetch(`${API_BASE}/api/video/upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function fetchVideoAnalysis(
+  manualId: string,
+  videoId: string
+): Promise<VideoAnalysis> {
+  const res = await fetch(`${API_BASE}/api/video/analysis/${manualId}/${videoId}`);
+  if (!res.ok) throw new Error(`Failed to fetch video analysis: ${res.status}`);
+  return res.json();
+}
+
+export async function listVideos(
+  manualId: string
+): Promise<Array<{ video_id: string; filename: string; duration_seconds: number; processed_at: string }>> {
+  const res = await fetch(`${API_BASE}/api/video/list/${manualId}`);
+  if (!res.ok) throw new Error(`Failed to list videos: ${res.status}`);
+  return res.json();
+}
