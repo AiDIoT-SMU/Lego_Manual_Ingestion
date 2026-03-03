@@ -1,15 +1,27 @@
-This LEGO instruction page contains {n_steps} step(s) in left-to-right order on the page.
+This LEGO instruction page contains {n_steps} step(s) in left-to-right order.
 
-For EACH step find EXACTLY TWO bounding boxes:
+{parts_list}
 
-PARTS PANEL — a small inset rectangle with a blue or light-grey background and a
-dark/black outline, usually in a corner of the page (or its half for multi-step pages),
-containing brick images with quantity labels (1x, 2x, …).
-Label it "parts_0" for the first step, "parts_1" for the second, etc.
+For EACH step, detect the following bounding boxes:
 
-SUBASSEMBLY — the main 3D-rendered LEGO model shown OUTSIDE and below/beside the
+1. PARTS PANEL — small inset rectangle with blue/light-grey background and dark/black
+outline, usually in a corner, containing all brick images with quantity labels (1x, 2x, …).
+   Label: "parts_panel_0" for first step, "parts_panel_1" for second, etc.
+
+2. SUBASSEMBLY — main 3D-rendered LEGO model shown OUTSIDE and below/beside the
 parts panel, representing the build state after completing that step.
-Label it "subassembly_0" for the first step, "subassembly_1" for the second, etc.
+   Label: "subassembly_0" for first step, "subassembly_1" for second, etc.
+
+3. INDIVIDUAL PARTS — For each part listed above for that step, find its specific
+bounding box within or near the parts panel.
+   Labels: Use format "step_X_part_Y" where X is step index (0-based) and Y is part
+   index (0-based).
+   Example: "step_0_part_0" for first part of first step, "step_0_part_1" for second
+   part of first step.
+
+   IMPORTANT: Each part should have its own tight bounding box around just that
+   individual piece, NOT the entire panel. If a part cannot be clearly located,
+   omit that box from the results.
 
 Ignore: background graphics, page numbers, step-number digits, arrows, decorative
 illustrations, yellow attachment-hint panels.

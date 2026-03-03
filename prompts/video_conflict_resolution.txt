@@ -1,0 +1,89 @@
+You are resolving conflicts between a LEGO manual's part list and video evidence.
+
+MANUAL SAYS:
+Step {step_number} requires: {manual_parts}
+
+VIDEO EVIDENCE:
+In frames {frame_range} (timestamps {time_range}), we detected: {video_parts}
+Detection confidence scores: {confidence_scores}
+
+REFERENCE IMAGES:
+You will see:
+1. Manual part images (cropped from the instruction manual)
+2. Video frame crops showing the parts detected in the user's hands/workspace
+
+TASK:
+Determine which source (manual or video) is correct and explain why.
+
+ANALYSIS CRITERIA:
+
+1. Video Quality:
+   - Can we clearly see the parts in the video frames?
+   - Are hands or other objects occluding the parts?
+   - Is the lighting sufficient for accurate identification?
+
+2. Detection Confidence:
+   - Confidence >0.8 is highly reliable
+   - Confidence 0.6-0.8 is moderately reliable
+   - Confidence <0.6 is uncertain
+
+3. Multiple Frame Confirmation:
+   - Is the part seen consistently across multiple frames?
+   - Parts visible in 3+ frames with high confidence are very reliable
+
+4. Visual Similarity:
+   - Could the detected part be misidentified?
+   - Are there similar-looking parts that might be confused?
+   - Check color, size, and shape carefully
+
+5. Manual Extraction Errors:
+   - Manual data comes from 2D image analysis which can make mistakes
+   - Common errors: misidentifying colors from perspective/lighting
+   - Common errors: confusing similar-sized parts (1x2 vs 2x2)
+   - Common errors: missing parts that are small or partially visible
+
+6. Context:
+   - Does the video part make sense for this assembly step?
+   - Is the manual part list consistent with the subassembly image?
+
+Return ONLY valid JSON in this exact format:
+
+If conflict exists:
+{
+  "conflict_exists": true,
+  "correct_source": "video",
+  "correct_parts": ["red round tile", "white 1x2 brick"],
+  "incorrect_parts": ["red 2x2 brick"],
+  "reasoning": "Video clearly shows red round tile with 0.95 confidence across 5 consecutive frames. The manual likely misidentified the part due to perspective distortion in the 2D instruction image making the round tile appear square. The video provides a clear 3D view confirming it is indeed a round tile, not a 2x2 brick.",
+  "confidence": 0.92
+}
+
+If no conflict (sources agree):
+{
+  "conflict_exists": false,
+  "correct_source": "both",
+  "correct_parts": ["red round tile", "grey baseplate"],
+  "incorrect_parts": [],
+  "reasoning": "Both manual and video agree on the parts required. Video detection shows red round tile and grey baseplate with high confidence (>0.9) matching the manual parts list.",
+  "confidence": 0.95
+}
+
+If uncertain (cannot determine which is correct):
+{
+  "conflict_exists": true,
+  "correct_source": "uncertain",
+  "correct_parts": [],
+  "incorrect_parts": [],
+  "reasoning": "Video frames are partially occluded by hands, making it difficult to confirm part identity with certainty. Manual analysis also shows low confidence. Additional frames or manual review needed.",
+  "confidence": 0.4
+}
+
+Fields explanation:
+- conflict_exists: true if manual and video disagree, false if they match
+- correct_source: "video", "manual", "both", or "uncertain"
+- correct_parts: Array of parts that are confirmed correct
+- incorrect_parts: Array of parts that are confirmed incorrect
+- reasoning: Detailed explanation of your analysis (2-4 sentences)
+- confidence: 0.0-1.0 indicating certainty of your conclusion
+
+Do NOT include any text before or after the JSON.

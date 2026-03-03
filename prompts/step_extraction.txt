@@ -10,7 +10,9 @@ For EACH step on this page extract the following — DO NOT include any coordina
 4. actions — 1 to 3 concise assembly instructions.
 5. notes — any warnings or tips shown on the page (null if none).
 
-Return ONLY a JSON array in this exact format, no other text:
+If this page contains no assembly steps (e.g. it is a cover, parts list, or intro page), return an empty JSON array: []
+
+Otherwise, return ONLY a JSON array in this exact format, no other text:
 
 [
   {

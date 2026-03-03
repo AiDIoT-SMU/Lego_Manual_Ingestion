@@ -35,7 +35,8 @@ export default function PartsDetailPage({
         <h1 className="text-2xl font-bold">{manual_id}</h1>
         {data && (
           <span className="ml-auto text-sm text-gray-500">
-            {data.parts.length} unique part{data.parts.length !== 1 ? "s" : ""}
+            {data.total_unique_parts ?? data.parts.length} unique part
+            {(data.total_unique_parts ?? data.parts.length) !== 1 ? "s" : ""}
           </span>
         )}
       </div>
@@ -71,15 +72,24 @@ export default function PartsDetailPage({
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <span className="text-2xl">🧱</span>
+                  <div className="text-gray-500 text-xs text-center px-2">
+                    No image
+                  </div>
                 )}
               </div>
 
               {/* Info */}
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-100 leading-snug">
-                  {part.description}
-                </p>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <p className="text-sm font-medium text-gray-100 leading-snug flex-1">
+                    {part.description}
+                  </p>
+                  {part.total_quantity && (
+                    <span className="px-2 py-1 bg-yellow-400 text-gray-900 text-xs font-bold rounded shrink-0">
+                      ×{part.total_quantity}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-gray-500 mt-1.5">
                   Used in step{part.used_in_steps.length !== 1 ? "s" : ""}:{" "}
                   <span className="text-gray-400">
