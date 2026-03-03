@@ -1,0 +1,35 @@
+You are analyzing a single frame from a LEGO assembly video.
+
+TASK:
+1. Determine if this frame is RELEVANT to the LEGO assembly process.
+2. If relevant, classify whether it is an ACTION frame or a PLACEMENT frame.
+
+DEFINITIONS:
+- IRRELEVANT: Title screens, black frames, text overlays, non-assembly content, transition
+  frames with no bricks or hands visible, or frames with no discernible assembly activity.
+- ACTION: The user is actively in the process of handling or placing a part — hands are
+  moving, the piece is held mid-air, being positioned over the assembly, or being pressed
+  down. The placement is NOT yet finalized; the assembly state is in transition.
+- PLACEMENT: The user has completed placing the part — the new brick is resting on the
+  subassembly, hands are clear or withdrawing, and the stable assembled state is clearly
+  visible. This is the "result" frame showing the outcome of an assembly action.
+
+GUIDELINES:
+- Most frames will be RELEVANT.
+- Prefer PLACEMENT when the assembly looks stable and a completed addition is clearly visible.
+- Prefer ACTION when hands are actively engaged with a part.
+- When in doubt between ACTION and PLACEMENT, choose ACTION.
+
+Return ONLY valid JSON in this exact format:
+{
+  "is_relevant": true,
+  "frame_type": "action",
+  "confidence": 0.85,
+  "reasoning": "Hands are actively pressing a white 2x2 brick down onto the baseplate"
+}
+
+Rules:
+- If is_relevant is false, set frame_type to null.
+- confidence should reflect certainty of your classification (0.0–1.0).
+
+Do NOT include any text before or after the JSON.

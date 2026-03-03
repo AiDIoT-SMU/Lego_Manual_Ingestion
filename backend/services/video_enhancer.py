@@ -1,12 +1,12 @@
 """
 Video Enhancer: Enhances manual steps with detailed sub-steps from video analysis.
 
-This service uses exactly 3 VLM call types:
-1. Action Detection: For each frame, detect action type and parts involved
-2. Spatial Extraction: For placement frames, extract spatial brick placement info
-3. Reconciliation: Reconcile data with manual and generate corrections
-
-Outputs video_enhanced.json with hierarchical sub-steps and spatial descriptions.
+Three VLM call pipeline:
+1. Frame Classification: Per frame — determine relevance and type (action vs placement).
+2. Placement Analysis: Per consecutive placement frame pair — identify what new part was
+   added and generate a human-readable action description. Saves video_placements_{id}.json.
+3. Reconciliation: Map all placement actions to manual steps, produce sub-steps and
+   corrections, output video_enhanced.json.
 """
 
 import io
@@ -47,44 +47,34 @@ class VideoEnhancer:
         data_service: DataService,
         settings: Settings
     ):
-        """
-        Initialize video enhancer.
-
-        Args:
-            vlm_extractor: VLM extractor for making VLM calls
-            data_service: Data service for loading manual and video data
-            settings: Application settings
-        """
         self.vlm = vlm_extractor
         self.data_service = data_service
         self.settings = settings
 
-        # Load prompt templates
         prompts_dir = Path("prompts")
 
-        # VLM Call Type 1: Action Detection
-        action_detection_prompt = prompts_dir / "video_action_detection.txt"
-        if action_detection_prompt.exists():
-            with open(action_detection_prompt, "r") as f:
-                self.action_detection_template = f.read()
-        else:
-            self.action_detection_template = self._get_default_action_detection_prompt()
+        action_detection_path = prompts_dir / "video_action_detection.txt"
+        self.action_detection_template = (
+            action_detection_path.read_text()
+            if action_detection_path.exists()
+            else self._get_default_action_detection_prompt()
+        )
 
-        # VLM Call Type 2: Spatial Extraction
-        spatial_extraction_prompt = prompts_dir / "video_spatial_extraction.txt"
-        if spatial_extraction_prompt.exists():
-            with open(spatial_extraction_prompt, "r") as f:
-                self.spatial_extraction_template = f.read()
-        else:
-            self.spatial_extraction_template = self._get_default_spatial_extraction_prompt()
+        placement_analysis_path = prompts_dir / "video_placement_analysis.txt"
+        self.placement_analysis_template = (
+            placement_analysis_path.read_text()
+            if placement_analysis_path.exists()
+            else self._get_default_placement_analysis_prompt()
+        )
 
-        # VLM Call Type 3: Reconciliation
-        reconciliation_prompt = prompts_dir / "video_reconciliation.txt"
-        if reconciliation_prompt.exists():
-            with open(reconciliation_prompt, "r") as f:
-                self.reconciliation_template = f.read()
-        else:
-            self.reconciliation_template = self._get_default_reconciliation_prompt()
+        reconciliation_path = prompts_dir / "video_reconciliation.txt"
+        self.reconciliation_template = (
+            reconciliation_path.read_text()
+            if reconciliation_path.exists()
+            else self._get_default_reconciliation_prompt()
+        )
+
+    # ── public ───────────────────────────────────────────────────────────────
 
     async def enhance_manual_with_video(
         self,
@@ -92,151 +82,57 @@ class VideoEnhancer:
         video_id: str
     ) -> Dict[str, Any]:
         """
-        Generate video-enhanced manual from entire video using 3 VLM call types.
+        Run the full 3-call pipeline and return the video_enhanced.json structure.
 
-        Flow:
-        1. Extract ALL frames from video (every 30 frames, no limit)
-        2. VLM Call Type 1: For each frame, detect action and parts
-        3. VLM Call Type 2: For placement frames, extract spatial info
-        4. VLM Call Type 3: Reconcile with manual and generate corrections
-        5. Build video_enhanced.json structure
-
-        Args:
-            manual_id: Manual identifier
-            video_id: Video identifier
-
-        Returns:
-            Complete video_enhanced.json structure
+        Pipeline:
+        1. Extract frames from the full video.
+        2. VLM Call 1: Classify every frame as irrelevant / action / placement.
+        3. VLM Call 2: For each consecutive placement frame pair, identify what new
+           part was added → save video_placements_{video_id}.json.
+        4. VLM Call 3: Reconcile placements with enhanced.json → video_enhanced.json.
         """
         logger.info(f"Starting video enhancement for manual {manual_id}, video {video_id}")
 
-        # Load manual data
-        try:
-            manual_data = self.data_service.get_steps(manual_id)
-            logger.info(f"Loaded manual data: {len(manual_data['steps'])} steps")
-        except Exception as e:
-            logger.error(f"Failed to load manual data: {e}")
-            raise ValueError(f"Manual {manual_id} not found: {e}")
+        manual_data = self.data_service.get_steps(manual_id)
+        logger.info(f"Loaded manual data: {len(manual_data['steps'])} steps")
 
-        # Extract all frames from video
-        logger.info("Extracting all frames from video...")
         frames = await self._extract_all_frames(manual_id, video_id)
-        logger.info(f"Extracted {len(frames)} frames for enhancement")
+        logger.info(f"Extracted {len(frames)} frames")
 
-        # === VLM CALL TYPE 1: Action Detection ===
-        # For each frame, detect what action is happening
-        logger.info("Running VLM Call Type 1: Action Detection for all frames...")
-        frame_actions = await self._detect_actions_for_all_frames(frames, manual_id, video_id)
-        logger.info(f"Detected actions for {len(frame_actions)} frames")
+        # === VLM CALL 1: Frame Classification ===
+        logger.info("VLM Call 1: Classifying frames (action vs placement)...")
+        classified_frames = await self._classify_all_frames(frames)
+        placement_frames = [f for f in classified_frames if f["frame_type"] == "placement"]
+        logger.info(
+            f"Classification complete: {len(placement_frames)} placement frames, "
+            f"{len(classified_frames) - len(placement_frames)} action frames "
+            f"(from {len(frames)} total)"
+        )
 
-        # Group frames by manual step
-        frames_by_step = self._group_frames_by_step(frame_actions, manual_data)
+        # === VLM CALL 2: Placement Analysis ===
+        logger.info("VLM Call 2: Analyzing consecutive placement frames...")
+        placement_actions = await self._analyze_placement_frames(placement_frames)
+        logger.info(f"Generated {len(placement_actions)} placement action descriptions")
 
-        # Build enhanced steps
-        enhanced_steps = []
+        video_placements = self._save_video_placements(
+            manual_id, video_id, placement_actions, placement_frames
+        )
 
-        for step in manual_data["steps"]:
-            step_num = step["step_number"]
-            logger.info(f"Processing step {step_num}")
+        # === VLM CALL 3: Reconciliation ===
+        logger.info("VLM Call 3: Reconciling placements with manual...")
+        enhanced_manual = await self._reconcile_placements_with_manual(
+            manual_id, video_id, video_placements, manual_data, frames
+        )
 
-            step_frames = frames_by_step.get(step_num, [])
-
-            if not step_frames:
-                logger.warning(f"No frames found for step {step_num}, using original step")
-                enhanced_step = {**step, "sub_steps": [], "corrections": []}
-                enhanced_steps.append(enhanced_step)
-                continue
-
-            # Segment frames into sub-steps based on action changes
-            sub_step_segments = self._segment_into_substeps(step_frames)
-            logger.info(f"  Segmented into {len(sub_step_segments)} sub-steps")
-            for i, seg in enumerate(sub_step_segments):
-                logger.info(
-                    f"    Sub-step {step_num}.{i+1}: "
-                    f"action={seg['action_type']}, "
-                    f"frames={seg['start_frame']}-{seg['end_frame']}, "
-                    f"parts={seg['parts_involved']}"
-                )
-
-            # === VLM CALL TYPE 2: Spatial Extraction ===
-            # For each placement sub-step, extract spatial information
-            sub_steps = []
-            for i, segment in enumerate(sub_step_segments):
-                sub_step_num = f"{step_num}.{i + 1}"
-                logger.info(f"  Processing sub-step {sub_step_num}: {segment['action_type']}")
-
-                spatial_desc = None
-                if segment["action_type"] in ["place", "attach"]:
-                    logger.info(f"    🎯 Placement sub-step detected! Running spatial extraction...")
-                    # Run VLM Call Type 2: Spatial Extraction
-                    spatial_desc = await self._extract_spatial_info(
-                        segment, manual_id, video_id
-                    )
-
-                # Build description from action and spatial info
-                description = self._build_description(segment, spatial_desc)
-
-                sub_step = {
-                    "sub_step_number": sub_step_num,
-                    "action_type": segment["action_type"],
-                    "description": description,
-                    "parts_involved": segment["parts_involved"],
-                    "spatial_description": spatial_desc,
-                    "frame_range": {
-                        "start_frame": segment["start_frame"],
-                        "end_frame": segment["end_frame"],
-                        "start_time": segment["start_time"],
-                        "end_time": segment["end_time"]
-                    },
-                    "confidence": segment["confidence"]
-                }
-                sub_steps.append(sub_step)
-
-            # === VLM CALL TYPE 3: Reconciliation ===
-            # Reconcile video data with manual and detect corrections
-            logger.info(f"  Running VLM Call Type 3: Reconciliation for step {step_num}")
-            corrections = await self._reconcile_with_manual(
-                step, step_frames, manual_id, video_id
-            )
-            if corrections:
-                logger.info(f"  Found {len(corrections)} corrections for step {step_num}")
-
-            # Build enhanced step
-            enhanced_step = {
-                **step,
-                "original_manual_step": step_num,
-                "sub_steps": sub_steps,
-                "corrections": corrections
-            }
-            enhanced_steps.append(enhanced_step)
-
-        # Build video-enhanced manual structure
-        enhanced_manual = {
-            "manual_id": manual_id,
-            "source_video_id": video_id,
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "video_metadata": {
-                "duration_seconds": 0.0,  # Will be filled from metadata
-                "frame_count": len(frames),
-                "filename": f"{video_id}.mp4"
-            },
-            "steps": enhanced_steps,
-            "manual_step_mapping": self._build_step_mapping(manual_data["steps"], enhanced_steps)
-        }
-
-        logger.info(f"Video enhancement complete: {len(enhanced_steps)} steps enhanced")
+        logger.info(f"Video enhancement complete: {len(enhanced_manual['steps'])} steps enhanced")
         return enhanced_manual
 
-    async def _extract_all_frames(
-        self,
-        manual_id: str,
-        video_id: str
-    ) -> List[Path]:
-        """Extract all frames from video (no limit)."""
+    # ── frame extraction ─────────────────────────────────────────────────────
+
+    async def _extract_all_frames(self, manual_id: str, video_id: str) -> List[Path]:
         from backend.services.video_processor import VideoProcessor
 
         video_path = self.settings.data_dir / "videos" / manual_id / f"{video_id}.mp4"
-
         if not video_path.exists():
             raise ValueError(f"Video file not found: {video_path}")
 
@@ -244,535 +140,340 @@ class VideoEnhancer:
         frames_dir = video_path.parent / f"{video_id}_enhancement_frames"
         frames_dir.mkdir(exist_ok=True)
 
-        logger.info("Extracting frames from entire video (no frame limit)...")
         frames = video_processor.extract_frames(
             video_path=video_path,
             output_dir=frames_dir,
-            frame_interval=30,  # Extract every 30th frame for detailed enhancement
-            max_frames=None  # NO LIMIT - process entire video
+            frame_interval=30,
+            max_frames=None
         )
-
         return [Path(f["frame_path"]) for f in frames]
 
-    async def _detect_actions_for_all_frames(
-        self,
-        frames: List[Path],
-        manual_id: str,
-        video_id: str
-    ) -> List[Dict[str, Any]]:
+    # ── VLM Call 1 ────────────────────────────────────────────────────────────
+
+    async def _classify_all_frames(self, frames: List[Path]) -> List[Dict[str, Any]]:
         """
-        VLM CALL TYPE 1: Action Detection
+        VLM Call 1: Classify each frame as irrelevant, action, or placement.
 
-        For each frame, detect what action is happening and what parts are involved.
-
-        Returns list of frame action dicts:
-        {
-            "frame_number": int,
-            "frame_path": Path,
-            "timestamp": float,
-            "action_type": "pick" | "place" | "attach" | "adjust" | "verify" | "none",
-            "parts_involved": [str],
-            "confidence": float,
-            "is_relevant": bool  # False for title screens, etc.
-        }
+        Returns only relevant frames with frame_type set to "action" or "placement".
         """
-        logger.info(f"Running action detection on {len(frames)} frames...")
-
-        frame_actions = []
+        classified = []
 
         for i, frame_path in enumerate(frames):
-            # Extract frame number from filename (e.g., "frame_000123.jpg" -> 123)
             frame_num = int(frame_path.stem.split('_')[-1])
-
-            # Calculate timestamp (assuming 30 fps and frame_interval=30, so 1 frame per second)
             timestamp = frame_num / 30.0
 
             try:
-                # Load and resize frame
                 frame_img = _resize_image(str(frame_path), width=600)
                 frame_b64 = _image_to_b64(frame_img)
-
-                # Build prompt for action detection
-                prompt = self.action_detection_template.replace(
-                    "{frame_number}", str(frame_num)
-                ).replace(
-                    "{timestamp}", f"{timestamp:.2f}"
-                )
 
                 content = [
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{frame_b64}"}},
-                    {"type": "text", "text": prompt}
+                    {"type": "text", "text": self.action_detection_template}
                 ]
-
                 messages = [{"role": "user", "content": content}]
 
-                # Make VLM call
                 raw = self.vlm._litellm_with_retry(messages)
                 result = _parse_json(raw)
 
-                frame_action = {
-                    "frame_number": frame_num,
-                    "frame_path": frame_path,
-                    "timestamp": timestamp,
-                    "action_type": result.get("action_type", "none").lower(),
-                    "parts_involved": result.get("parts_involved", []),
-                    "confidence": result.get("confidence", 0.0),
-                    "is_relevant": result.get("is_relevant", True)
-                }
+                is_relevant = result.get("is_relevant", True)
+                frame_type = result.get("frame_type") if is_relevant else None
 
-                # Log detailed VLM output for action detection
                 logger.info(
                     f"  Frame {frame_num} (t={timestamp:.1f}s): "
-                    f"action={frame_action['action_type']}, "
-                    f"parts={frame_action['parts_involved']}, "
-                    f"confidence={frame_action['confidence']:.2f}, "
-                    f"relevant={frame_action['is_relevant']}"
+                    f"relevant={is_relevant}, type={frame_type}, "
+                    f"confidence={result.get('confidence', 0.0):.2f}"
                 )
-                if frame_action['action_type'] in ['place', 'attach']:
-                    logger.warning(f"    ⭐ PLACEMENT FRAME DETECTED: Frame {frame_num}")
 
-                frame_actions.append(frame_action)
-
-                if (i + 1) % 50 == 0:
-                    logger.info(f"  === Processed {i + 1}/{len(frames)} frames ===")
+                if is_relevant:
+                    classified.append({
+                        "frame_number": frame_num,
+                        "frame_path": frame_path,
+                        "timestamp": timestamp,
+                        "frame_type": frame_type,
+                        "confidence": result.get("confidence", 0.0)
+                    })
 
             except Exception as e:
-                logger.error(f"Failed to detect action for frame {frame_num}: {e}")
-                # Add placeholder for failed frame
-                frame_actions.append({
+                logger.error(f"Failed to classify frame {frame_num}: {e}")
+                classified.append({
                     "frame_number": frame_num,
                     "frame_path": frame_path,
                     "timestamp": timestamp,
-                    "action_type": "none",
-                    "parts_involved": [],
-                    "confidence": 0.0,
-                    "is_relevant": True
+                    "frame_type": "action",
+                    "confidence": 0.0
                 })
 
-        # Filter out irrelevant frames
-        relevant_frames = [f for f in frame_actions if f["is_relevant"]]
-        irrelevant_count = len(frame_actions) - len(relevant_frames)
-        logger.info(f"Filtered to {len(relevant_frames)} relevant frames ({irrelevant_count} irrelevant frames removed)")
+            if (i + 1) % 50 == 0:
+                logger.info(f"  === Classified {i + 1}/{len(frames)} frames ===")
 
-        # Log summary of placement frames
-        placement_frames = [f for f in relevant_frames if f["action_type"] in ["place", "attach"]]
-        logger.info(f"📊 SUMMARY: {len(placement_frames)} PLACEMENT FRAMES detected out of {len(relevant_frames)} relevant frames")
-        for pf in placement_frames[:10]:  # Show first 10
-            logger.info(f"   Frame {pf['frame_number']} (t={pf['timestamp']:.1f}s): {pf['action_type']} - {pf['parts_involved']}")
-        if len(placement_frames) > 10:
-            logger.info(f"   ... and {len(placement_frames) - 10} more placement frames")
+        placement_count = sum(1 for f in classified if f["frame_type"] == "placement")
+        logger.info(
+            f"Classification summary: {len(classified)} relevant, "
+            f"{placement_count} placement, {len(classified) - placement_count} action, "
+            f"{len(frames) - len(classified)} irrelevant"
+        )
+        return classified
 
-        return relevant_frames
+    # ── VLM Call 2 ────────────────────────────────────────────────────────────
 
-    def _group_frames_by_step(
+    async def _analyze_placement_frames(
         self,
-        frame_actions: List[Dict[str, Any]],
-        manual_data: Dict[str, Any]
-    ) -> Dict[int, List[Dict[str, Any]]]:
+        placement_frames: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """
-        Group frames by manual step number based on parts involved.
+        VLM Call 2: For each consecutive placement frame pair, identify the new part
+        added and generate a natural-language action description.
 
-        Matches parts detected in frames to parts required in manual steps.
+        Sends (previous frame + current frame) as two images per call.
+        For the first frame, only the current frame is sent.
         """
-        frames_by_step = {}
+        if not placement_frames:
+            return []
 
+        placement_actions = []
+
+        for i, current_frame in enumerate(placement_frames):
+            frame_num = current_frame["frame_number"]
+            timestamp = current_frame["timestamp"]
+
+            try:
+                current_img = _resize_image(str(current_frame["frame_path"]), width=800)
+                current_b64 = _image_to_b64(current_img)
+
+                if i == 0:
+                    content = [
+                        {"type": "text", "text": "CURRENT PLACEMENT FRAME (first placement — no previous frame):"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
+                        {"type": "text", "text": self.placement_analysis_template}
+                    ]
+                else:
+                    prev_frame = placement_frames[i - 1]
+                    prev_img = _resize_image(str(prev_frame["frame_path"]), width=800)
+                    prev_b64 = _image_to_b64(prev_img)
+
+                    content = [
+                        {"type": "text", "text": "PREVIOUS PLACEMENT FRAME:"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{prev_b64}"}},
+                        {"type": "text", "text": "CURRENT PLACEMENT FRAME:"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
+                        {"type": "text", "text": self.placement_analysis_template}
+                    ]
+
+                messages = [{"role": "user", "content": content}]
+
+                raw = self.vlm._litellm_with_retry(messages)
+                result = _parse_json(raw)
+
+                action_desc = result.get("action_description")
+
+                if action_desc:
+                    placement_actions.append({
+                        "placement_index": i,
+                        "frame_number": frame_num,
+                        "timestamp": timestamp,
+                        "action_description": action_desc,
+                        "new_parts": result.get("new_parts", []),
+                        "location": result.get("location"),
+                        "confidence": result.get("confidence", 0.0)
+                    })
+                    logger.info(f"  Placement {i} (frame {frame_num}): {action_desc}")
+                else:
+                    logger.info(f"  Placement {i} (frame {frame_num}): no new parts detected")
+
+            except Exception as e:
+                logger.error(f"Failed to analyze placement frame {frame_num}: {e}")
+
+        return placement_actions
+
+    # ── intermediate file ─────────────────────────────────────────────────────
+
+    def _save_video_placements(
+        self,
+        manual_id: str,
+        video_id: str,
+        placement_actions: List[Dict[str, Any]],
+        placement_frames: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Save intermediate video_placements_{video_id}.json and return its content."""
+        video_placements = {
+            "manual_id": manual_id,
+            "video_id": video_id,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "total_placement_frames": len(placement_frames),
+            "placements": placement_actions
+        }
+
+        output_path = (
+            self.settings.data_dir / "processed" / manual_id
+            / f"video_placements_{video_id}.json"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(video_placements, f, indent=2)
+
+        logger.info(
+            f"Saved {len(placement_actions)} placement actions to {output_path}"
+        )
+        return video_placements
+
+    # ── VLM Call 3 ────────────────────────────────────────────────────────────
+
+    async def _reconcile_placements_with_manual(
+        self,
+        manual_id: str,
+        video_id: str,
+        video_placements: Dict[str, Any],
+        manual_data: Dict[str, Any],
+        all_frames: List[Path]
+    ) -> Dict[str, Any]:
+        """
+        VLM Call 3: Map placement actions to manual steps, generate micro sub-steps,
+        correct errors, and return the video_enhanced.json structure.
+
+        Sends enhanced.json + video_placements.json as text, plus up to 5 sample
+        placement frame images for visual grounding.
+        """
+        enhanced_json_str = json.dumps(manual_data, indent=2)
+        placements_json_str = json.dumps(video_placements, indent=2)
+
+        prompt = self.reconciliation_template.replace(
+            "{enhanced_json}", enhanced_json_str
+        ).replace(
+            "{video_placements_json}", placements_json_str
+        )
+
+        # Build a frame_number → Path lookup for sample images
+        frame_lookup: Dict[int, Path] = {
+            int(f.stem.split('_')[-1]): f for f in all_frames
+        }
+
+        # Pick up to 5 evenly-spaced placement frames as visual context
+        placements = video_placements.get("placements", [])
+        step = max(1, len(placements) // 5)
+        sample_placements = placements[::step][:5]
+
+        content: List[Dict[str, Any]] = []
+        if sample_placements:
+            content.append({"type": "text", "text": "SAMPLE PLACEMENT FRAMES FOR VISUAL CONTEXT:"})
+            for p in sample_placements:
+                frame_path = frame_lookup.get(p["frame_number"])
+                if frame_path and frame_path.exists():
+                    try:
+                        img = _resize_image(str(frame_path), width=600)
+                        b64 = _image_to_b64(img)
+                        content.append({
+                            "type": "text",
+                            "text": (
+                                f"Placement {p['placement_index']} "
+                                f"(frame {p['frame_number']}): "
+                                f"{p.get('action_description', '')}"
+                            )
+                        })
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64}"}
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not include frame {p['frame_number']} as context: {e}")
+
+        content.append({"type": "text", "text": prompt})
+        messages = [{"role": "user", "content": content}]
+
+        raw = self.vlm._litellm_with_retry(messages)
+        result = _parse_json(raw)
+
+        reconciled_by_num = {
+            s["step_number"]: s for s in result.get("steps", [])
+        }
+
+        enhanced_steps = []
         for step in manual_data["steps"]:
             step_num = step["step_number"]
-            step_parts = {p["description"].lower() for p in step.get("parts_required", [])}
+            reconciled = reconciled_by_num.get(step_num, {})
+            enhanced_steps.append({
+                **step,
+                "sub_steps": reconciled.get("sub_steps", []),
+                "corrections": reconciled.get("corrections", [])
+            })
 
-            # Find frames that involve parts from this step
-            step_frames = []
-            for frame_action in frame_actions:
-                frame_parts = {p.lower() for p in frame_action["parts_involved"]}
-
-                # Check if any frame parts match step parts
-                if frame_parts & step_parts or not frame_action["parts_involved"]:
-                    step_frames.append(frame_action)
-
-            frames_by_step[step_num] = step_frames
-
-        return frames_by_step
-
-    def _segment_into_substeps(
-        self,
-        step_frames: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Segment frames into sub-steps based on action type changes.
-
-        Returns list of sub-step segments:
-        {
-            "action_type": str,
-            "parts_involved": [str],
-            "start_frame": int,
-            "end_frame": int,
-            "start_time": float,
-            "end_time": float,
-            "frames": [Dict],
-            "confidence": float
-        }
-        """
-        if not step_frames:
-            return []
-
-        segments = []
-        current_segment = None
-
-        for frame in step_frames:
-            action_type = frame["action_type"]
-
-            # Start new segment if action type changes or no current segment
-            if current_segment is None or current_segment["action_type"] != action_type:
-                if current_segment is not None:
-                    segments.append(current_segment)
-
-                current_segment = {
-                    "action_type": action_type,
-                    "parts_involved": frame["parts_involved"],
-                    "start_frame": frame["frame_number"],
-                    "end_frame": frame["frame_number"],
-                    "start_time": frame["timestamp"],
-                    "end_time": frame["timestamp"],
-                    "frames": [frame],
-                    "confidence": frame["confidence"]
-                }
-            else:
-                # Continue current segment
-                current_segment["end_frame"] = frame["frame_number"]
-                current_segment["end_time"] = frame["timestamp"]
-                current_segment["frames"].append(frame)
-                # Average confidence
-                current_segment["confidence"] = (
-                    current_segment["confidence"] + frame["confidence"]
-                ) / 2
-                # Accumulate unique parts
-                current_segment["parts_involved"] = list(set(
-                    current_segment["parts_involved"] + frame["parts_involved"]
-                ))
-
-        # Add last segment
-        if current_segment is not None:
-            segments.append(current_segment)
-
-        return segments
-
-    async def _extract_spatial_info(
-        self,
-        segment: Dict[str, Any],
-        manual_id: str,
-        video_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        VLM CALL TYPE 2: Spatial Extraction
-
-        For placement actions, extract spatial information about brick placement.
-
-        Returns:
-        {
-            "target_part": str,  # What you're placing onto
-            "placement_part": str,  # What you're placing
-            "location": str,  # General area (e.g., "top left corner")
-            "position_detail": str,  # Stud-level precision (e.g., "2 studs from left edge")
-            "orientation": str | null,  # "horizontal", "vertical", null
-            "relative_to": str | null  # Nearby part reference
-        }
-        """
-        parts = segment.get("parts_involved", [])
-        if not parts:
-            return None
-
-        placement_part = parts[0] if parts else "unknown part"
-        target_part = parts[1] if len(parts) > 1 else "baseplate"
-
-        # Get middle frame from segment for clearest placement view
-        frames = segment.get("frames", [])
-        if not frames:
-            return None
-
-        mid_frame = frames[len(frames) // 2]
-        frame_path = mid_frame["frame_path"]
-
-        try:
-            # Load frame
-            frame_img = _resize_image(str(frame_path), width=800)
-            frame_b64 = _image_to_b64(frame_img)
-
-            # Build prompt
-            prompt = self.spatial_extraction_template.replace(
-                "{placement_part}", placement_part
-            ).replace(
-                "{target_part}", target_part
-            )
-
-            content = [
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{frame_b64}"}},
-                {"type": "text", "text": prompt}
-            ]
-
-            messages = [{"role": "user", "content": content}]
-
-            # Make VLM call
-            logger.info(f"    🔍 VLM CALL 2 (Spatial Extraction) for frame {placement_frame['frame_number']}")
-            raw = self.vlm._litellm_with_retry(messages)
-            result = _parse_json(raw)
-
-            # Log detailed spatial extraction result
-            logger.info(f"    📍 Spatial Extraction Result:")
-            logger.info(f"       Location: {result.get('location', 'N/A')}")
-            logger.info(f"       Position Detail: {result.get('position_detail', 'N/A')}")
-            logger.info(f"       Orientation: {result.get('orientation', 'N/A')}")
-            logger.info(f"       Relative To: {result.get('relative_to', 'N/A')}")
-            logger.info(f"       Confidence: {result.get('confidence', 0.0):.2f}")
-
-            # Check confidence
-            if result.get("confidence", 0.0) < 0.5:
-                logger.warning(f"    ⚠️  Low confidence spatial extraction ({result.get('confidence', 0.0):.2f}), skipping")
-                return None
-
-            spatial_info = {
-                "target_part": target_part,
-                "placement_part": placement_part,
-                "location": result.get("location", ""),
-                "position_detail": result.get("position_detail", ""),
-                "orientation": result.get("orientation"),
-                "relative_to": result.get("relative_to")
+        return {
+            "manual_id": manual_id,
+            "source_video_id": video_id,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "video_metadata": {
+                "frame_count": len(all_frames),
+                "filename": f"{video_id}.mp4"
+            },
+            "steps": enhanced_steps,
+            "manual_step_mapping": {
+                str(s["step_number"]): [s["step_number"]] for s in manual_data["steps"]
             }
-
-            logger.info(f"    ✅ Spatial extraction successful")
-            return spatial_info
-
-        except Exception as e:
-            logger.error(f"Spatial extraction failed: {e}")
-            return None
-
-    async def _reconcile_with_manual(
-        self,
-        manual_step: Dict[str, Any],
-        step_frames: List[Dict[str, Any]],
-        manual_id: str,
-        video_id: str
-    ) -> List[Dict[str, Any]]:
-        """
-        VLM CALL TYPE 3: Reconciliation
-
-        Reconcile video evidence with manual data and detect corrections.
-
-        Compares:
-        - Parts required in manual vs parts detected in video
-        - Actions described in manual vs actions seen in video
-
-        Returns list of corrections:
-        {
-            "field": str,  # e.g., "parts_required"
-            "original_value": any,  # Value from manual
-            "corrected_value": any,  # Correct value from video
-            "reason": str,  # Explanation
-            "confidence": float
         }
-        """
-        if not step_frames:
-            return []
 
-        # Get manual parts
-        manual_parts = {p["description"] for p in manual_step.get("parts_required", [])}
-
-        # Get video parts
-        video_parts = set()
-        for frame in step_frames:
-            video_parts.update(frame.get("parts_involved", []))
-
-        # Check if reconciliation is needed
-        if manual_parts == video_parts:
-            return []
-
-        missing_in_video = manual_parts - video_parts
-        extra_in_video = video_parts - manual_parts
-
-        if not missing_in_video and not extra_in_video:
-            return []
-
-        logger.info(f"Detected discrepancy: manual={manual_parts}, video={video_parts}")
-
-        try:
-            # Get representative frames
-            sample_frames = step_frames[::max(1, len(step_frames) // 3)][:3]
-
-            # Build multi-frame content
-            content = [{"type": "text", "text": "FRAMES FROM VIDEO:"}]
-
-            for frame in sample_frames:
-                frame_path = frame["frame_path"]
-                frame_img = _resize_image(str(frame_path), width=600)
-                frame_b64 = _image_to_b64(frame_img)
-
-                content.append({
-                    "type": "text",
-                    "text": f"Frame {frame['frame_number']} (t={frame['timestamp']:.1f}s):"
-                })
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{frame_b64}"}
-                })
-
-            # Build prompt
-            prompt = self.reconciliation_template.replace(
-                "{step_number}", str(manual_step["step_number"])
-            ).replace(
-                "{manual_parts}", ", ".join(manual_parts) if manual_parts else "none"
-            ).replace(
-                "{video_parts}", ", ".join(video_parts) if video_parts else "none"
-            ).replace(
-                "{manual_actions}", ", ".join(manual_step.get("actions", []))
-            )
-
-            content.append({"type": "text", "text": prompt})
-
-            messages = [{"role": "user", "content": content}]
-
-            # Make VLM call
-            logger.info(f"    🔍 VLM CALL 3 (Reconciliation) for step {manual_step['step_number']}")
-            logger.info(f"       Manual parts: {manual_parts}")
-            logger.info(f"       Video parts: {video_parts}")
-            raw = self.vlm._litellm_with_retry(messages)
-            result = _parse_json(raw)
-
-            # Log reconciliation result
-            logger.info(f"    🔄 Reconciliation Result:")
-            logger.info(f"       Conflict exists: {result.get('conflict_exists', False)}")
-            logger.info(f"       Video is correct: {result.get('video_is_correct', False)}")
-            logger.info(f"       Incorrect parts: {result.get('incorrect_parts', [])}")
-            logger.info(f"       Correct parts: {result.get('correct_parts', [])}")
-            logger.info(f"       Reason: {result.get('reason', 'N/A')}")
-            logger.info(f"       Confidence: {result.get('confidence', 0.0):.2f}")
-
-            corrections = []
-
-            if result.get("conflict_exists") and result.get("video_is_correct"):
-                logger.warning(f"    ⚠️  CORRECTION DETECTED for step {manual_step['step_number']}")
-                # Video shows the correct parts
-                for incorrect_part in result.get("incorrect_parts", []):
-                    if incorrect_part in missing_in_video:
-                        # Find corresponding correct part
-                        correct_parts = result.get("correct_parts", [])
-                        if correct_parts:
-                            correction = {
-                                "field": "parts_required",
-                                "original_value": incorrect_part,
-                                "corrected_value": correct_parts[0],
-                                "reason": result.get("reason", "Video evidence contradicts manual"),
-                                "confidence": result.get("confidence", 0.8)
-                            }
-                            corrections.append(correction)
-                            logger.info(f"       ✏️  Correction: {incorrect_part} → {correct_parts[0]}")
-
-            if not corrections:
-                logger.info(f"    ✅ No corrections needed for step {manual_step['step_number']}")
-
-            return corrections
-
-        except Exception as e:
-            logger.error(f"Reconciliation failed: {e}")
-            return []
-
-    def _build_description(
-        self,
-        segment: Dict[str, Any],
-        spatial: Optional[Dict[str, Any]]
-    ) -> str:
-        """Build natural language description from action and spatial info."""
-        action_type = segment["action_type"]
-        parts = segment.get("parts_involved", [])
-
-        if not parts:
-            return f"{action_type.capitalize()} action"
-
-        part_desc = parts[0]
-
-        if spatial and action_type in ["place", "attach"]:
-            location = spatial.get("location", "")
-            position_detail = spatial.get("position_detail", "")
-            target = spatial.get("target_part", "baseplate")
-
-            desc = f"{action_type.capitalize()} {part_desc} on {target}"
-            if location:
-                desc += f" at {location}"
-            if position_detail:
-                desc += f" ({position_detail})"
-            return desc
-        else:
-            return f"{action_type.capitalize()} {part_desc}"
-
-    def _build_step_mapping(
-        self,
-        manual_steps: List[Dict[str, Any]],
-        enhanced_steps: List[Dict[str, Any]]
-    ) -> Dict[str, List[int]]:
-        """Build mapping from manual step numbers to enhanced step numbers."""
-        mapping = {}
-        for manual_step, enhanced_step in zip(manual_steps, enhanced_steps):
-            manual_num = str(manual_step["step_number"])
-            enhanced_num = enhanced_step["step_number"]
-            mapping[manual_num] = [enhanced_num]
-        return mapping
+    # ── fallback prompts (used when prompt files are missing) ─────────────────
 
     def _get_default_action_detection_prompt(self) -> str:
-        """Default prompt for action detection."""
-        return """Analyze this frame and detect what assembly action is happening.
+        return (
+            "You are analyzing a single frame from a LEGO assembly video.\n\n"
+            "Determine if this frame is RELEVANT and classify it as ACTION or PLACEMENT.\n\n"
+            "- IRRELEVANT: title screens, black frames, no assembly visible.\n"
+            "- ACTION: hands actively handling/placing a part; placement not yet finalized.\n"
+            "- PLACEMENT: part is resting on assembly, hands clear, stable state visible.\n\n"
+            "Return ONLY valid JSON:\n"
+            "{\n"
+            '  "is_relevant": true,\n'
+            '  "frame_type": "action",\n'
+            '  "confidence": 0.85,\n'
+            '  "reasoning": "brief explanation"\n'
+            "}\n\n"
+            "If is_relevant is false, set frame_type to null.\n"
+            "Do NOT include any text before or after the JSON."
+        )
 
-Return JSON:
-{
-  "action_type": "pick" | "place" | "attach" | "adjust" | "verify" | "none",
-  "parts_involved": ["part description 1", "part description 2"],
-  "confidence": 0.0-1.0,
-  "is_relevant": true/false,
-  "reasoning": "brief explanation"
-}
-
-Action types:
-- "pick": Picking up a LEGO piece
-- "place": Placing a piece on the assembly
-- "attach": Attaching/pressing pieces together
-- "adjust": Adjusting position of placed pieces
-- "verify": Checking or showing the assembly
-- "none": No action or irrelevant frame (title screen, etc.)
-
-is_relevant should be false for title screens, text overlays, black screens, etc.
-"""
-
-    def _get_default_spatial_extraction_prompt(self) -> str:
-        """Default prompt for spatial extraction."""
-        return """Analyze this frame showing a LEGO brick placement and extract spatial information.
-
-The frame shows: {placement_part} being placed on {target_part}
-
-Return JSON:
-{
-  "location": "general area (e.g., 'top left corner', 'center', 'right side')",
-  "position_detail": "stud-level precision (e.g., '2 studs from left edge', '3 studs from top')",
-  "orientation": "horizontal" | "vertical" | null,
-  "relative_to": "nearby part reference" | null,
-  "confidence": 0.0-1.0
-}
-
-Be as precise as possible about the placement location."""
+    def _get_default_placement_analysis_prompt(self) -> str:
+        return (
+            "You are analyzing LEGO placement frames.\n\n"
+            "Compare PREVIOUS PLACEMENT FRAME and CURRENT PLACEMENT FRAME.\n"
+            "Identify what new part was added and where.\n\n"
+            'Output: "Add a [color] [type] [size] [part] to the [location] of the [reference]"\n\n'
+            "Return ONLY valid JSON:\n"
+            "{\n"
+            '  "new_parts": ["description"],\n'
+            '  "action_description": "Add a ... to the ...",\n'
+            '  "location": "specific location",\n'
+            '  "confidence": 0.9,\n'
+            '  "reasoning": "brief explanation"\n'
+            "}\n\n"
+            "If no new parts visible, set action_description to null and confidence to 0.0.\n"
+            "Do NOT include any text before or after the JSON."
+        )
 
     def _get_default_reconciliation_prompt(self) -> str:
-        """Default prompt for reconciliation."""
-        return """Compare the manual instructions with video evidence and detect discrepancies.
-
-Step {step_number}:
-- Manual says parts: {manual_parts}
-- Video shows parts: {video_parts}
-- Manual actions: {manual_actions}
-
-Return JSON:
-{
-  "conflict_exists": true/false,
-  "video_is_correct": true/false,
-  "incorrect_parts": ["parts that are wrong in manual"],
-  "correct_parts": ["correct parts from video"],
-  "reason": "explanation of discrepancy",
-  "confidence": 0.0-1.0
-}
-
-Only mark video_is_correct=true if you are confident the video shows the correct parts."""
+        return (
+            "Reconcile LEGO assembly video evidence with a manual to create enhanced instructions.\n\n"
+            "INPUT 1 — ENHANCED MANUAL:\n{enhanced_json}\n\n"
+            "INPUT 2 — VIDEO PLACEMENTS:\n{video_placements_json}\n\n"
+            "TASK:\n"
+            "1. Map each video placement to the correct manual step.\n"
+            "2. Create micro sub-steps (1.1, 1.2, ...) within each step.\n"
+            "3. Correct manual errors where video clearly contradicts it.\n\n"
+            "Return ONLY valid JSON:\n"
+            "{\n"
+            '  "steps": [\n'
+            "    {\n"
+            '      "step_number": 1,\n'
+            '      "sub_steps": [\n'
+            "        {\n"
+            '          "sub_step_number": "1.1",\n'
+            '          "action_description": "Add a ...",\n'
+            '          "placement_index": 0,\n'
+            '          "parts_involved": ["part"],\n'
+            '          "confidence": 0.9\n'
+            "        }\n"
+            "      ],\n"
+            '      "corrections": []\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "Do NOT include any text before or after the JSON."
+        )
