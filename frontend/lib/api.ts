@@ -320,6 +320,27 @@ export interface VideoEnhancedManual {
   manual_step_mapping: Record<string, number[]>;
 }
 
+export async function uploadAndEnhanceVideo(
+  manualId: string,
+  videoFile: File
+): Promise<{ video_id: string; status: string; message: string }> {
+  const form = new FormData();
+  form.append("manual_id", manualId);
+  form.append("video_file", videoFile);
+
+  const res = await fetch(`${API_BASE}/api/video/upload-and-enhance`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `Upload and enhance failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
 export async function enhanceManualWithVideo(
   manualId: string,
   videoId: string
@@ -337,7 +358,7 @@ export async function enhanceManualWithVideo(
 export async function fetchVideoEnhancedSteps(
   manualId: string
 ): Promise<VideoEnhancedManual> {
-  const res = await fetch(`${API_BASE}/api/manuals/${manualId}/video-enhanced`);
+  const res = await fetch(`${API_BASE}/api/video/manuals/${manualId}/video-enhanced`);
   if (!res.ok) throw new Error(`Failed to fetch video-enhanced steps: ${res.status}`);
   return res.json();
 }
@@ -350,7 +371,7 @@ export async function listVideoEnhancements(
   sub_steps_count: number;
   corrections_count: number;
 }>> {
-  const res = await fetch(`${API_BASE}/api/manuals/${manualId}/video-enhanced/list`);
+  const res = await fetch(`${API_BASE}/api/video/manuals/${manualId}/video-enhanced/list`);
   if (!res.ok) throw new Error(`Failed to list video enhancements: ${res.status}`);
   return res.json();
 }

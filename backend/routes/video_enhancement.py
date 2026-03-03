@@ -65,6 +65,97 @@ async def process_video_enhancement(
         logger.error(f"Traceback: {traceback.format_exc()}")
 
 
+@router.post("/upload-and-enhance")
+async def upload_and_enhance_video(
+    background_tasks: BackgroundTasks,
+    manual_id: str = Form(...),
+    video_file: UploadFile = File(...),
+    data_service: DataService = Depends(get_data_service),
+    enhancer: VideoEnhancer = Depends(get_video_enhancer)
+) -> Dict[str, Any]:
+    """
+    Upload video and directly start enhancement (bypasses video_analyzer).
+
+    This endpoint is specifically for video enhancement flow - it does NOT trigger
+    the video_analyzer (which has 1000 frame limit). Instead, it directly uploads
+    the video and starts enhancement processing on the ENTIRE video.
+
+    Use this endpoint for: Enhancement workflow (processes whole video)
+    Use /api/video/upload for: Video verification/analysis workflow (1000 frame limit)
+
+    Args:
+        background_tasks: FastAPI background tasks
+        manual_id: Manual identifier
+        video_file: Video file to upload
+        data_service: Data service dependency
+        enhancer: Video enhancer dependency
+
+    Returns:
+        {
+            "video_id": str,
+            "status": "processing",
+            "message": str
+        }
+
+    Raises:
+        HTTPException 404: If manual not found
+        HTTPException 500: If upload fails
+    """
+    import uuid
+    from pathlib import Path
+    from config.settings import Settings
+
+    settings = Settings()
+
+    # Verify manual exists
+    try:
+        data_service.get_steps(manual_id)
+    except HTTPException:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Manual '{manual_id}' not found. Please ingest the manual first."
+        )
+
+    # Generate unique video ID
+    video_id = str(uuid.uuid4())[:8]
+
+    # Create video directory
+    video_dir = settings.data_dir / "videos" / manual_id
+    video_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save uploaded video
+    video_path = video_dir / f"{video_id}.mp4"
+
+    try:
+        content = await video_file.read()
+        with open(video_path, "wb") as f:
+            f.write(content)
+        logger.info(f"Saved video to {video_path} ({len(content) / 1024 / 1024:.2f} MB)")
+    except Exception as e:
+        logger.error(f"Failed to save video: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save video: {str(e)}"
+        )
+
+    # Start background enhancement (NOT video_analyzer)
+    background_tasks.add_task(
+        process_video_enhancement,
+        manual_id,
+        video_id,
+        enhancer,
+        data_service
+    )
+
+    logger.info(f"Started direct video enhancement for {manual_id}/{video_id}")
+
+    return {
+        "video_id": video_id,
+        "status": "processing",
+        "message": f"Video uploaded successfully. Enhancement started (processing entire video)."
+    }
+
+
 @router.post("/enhance/{manual_id}/{video_id}")
 async def enhance_manual_with_video(
     background_tasks: BackgroundTasks,
@@ -74,14 +165,10 @@ async def enhance_manual_with_video(
     enhancer: VideoEnhancer = Depends(get_video_enhancer)
 ) -> Dict[str, Any]:
     """
-    Trigger video enhancement process.
+    Trigger video enhancement process for already-uploaded video.
 
-    This endpoint starts a background task to analyze the video and generate
-    video-enhanced.json with detailed sub-steps and spatial information.
-
-    Prerequisites:
-    - Video analysis must be completed (status: "completed")
-    - Manual enhanced.json must exist
+    This endpoint can be used if video was already uploaded via /api/video/upload.
+    For direct enhancement workflow, use /api/video/upload-and-enhance instead.
 
     Args:
         background_tasks: FastAPI background tasks
@@ -97,8 +184,7 @@ async def enhance_manual_with_video(
         }
 
     Raises:
-        HTTPException 404: If manual or video analysis not found
-        HTTPException 400: If video analysis not completed yet
+        HTTPException 404: If manual or video not found
     """
     # Verify manual exists
     try:
@@ -107,27 +193,16 @@ async def enhance_manual_with_video(
         logger.warning(f"Manual {manual_id} not found")
         raise
 
-    # Verify video analysis exists and is completed
-    try:
-        video_analysis = data_service.get_video_analysis(manual_id, video_id)
-    except HTTPException as e:
-        logger.warning(f"Video analysis for {video_id} not found")
+    # Verify video file exists
+    from config.settings import Settings
+    settings = Settings()
+    video_path = settings.data_dir / "videos" / manual_id / f"{video_id}.mp4"
+
+    if not video_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"Video analysis not found for video '{video_id}' in manual '{manual_id}'. "
-                   f"Please upload and analyze the video first."
-        )
-
-    # Check video analysis status
-    if video_analysis.get("status") == "processing":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Video analysis is still processing. Please wait for it to complete."
-        )
-    elif video_analysis.get("status") == "failed":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Video analysis failed. Cannot enhance manual with failed analysis."
+            detail=f"Video file not found for video '{video_id}' in manual '{manual_id}'. "
+                   f"Please upload the video first."
         )
 
     # Start background enhancement

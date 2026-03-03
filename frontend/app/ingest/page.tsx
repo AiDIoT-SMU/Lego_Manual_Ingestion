@@ -321,6 +321,9 @@ export default function IngestPage() {
         await submitUrl();
       } else if (mode === "pdf") {
         await submitPdf();
+      } else if (mode === "video") {
+        await submitVideo();
+        return; // submitVideo handles its own status/redirect
       } else {
         await submitUpload();
       }
@@ -386,6 +389,41 @@ export default function IngestPage() {
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data?.detail ?? `Server error ${res.status}`);
+    }
+  }
+
+  async function submitVideo() {
+    if (!videoFile) {
+      setMessage("Please select a video file");
+      setStatus("error");
+      return;
+    }
+
+    setStatus("submitting");
+    setMessage("Uploading video and starting enhancement...");
+
+    try {
+      const { uploadAndEnhanceVideo } = await import("@/lib/api");
+
+      // Upload video and directly start enhancement (bypasses video_analyzer)
+      // This processes the ENTIRE video (no 1000 frame limit)
+      const result = await uploadAndEnhanceVideo(manualId, videoFile);
+
+      setStatus("success");
+      setMessage(
+        `Video uploaded successfully! Enhancement is processing in the background.\n\n` +
+        `Video ID: ${result.video_id}\n\n` +
+        `The system is now:\n` +
+        `1. Extracting frames from the entire video (every 30 frames)\n` +
+        `2. Running VLM action detection on all frames\n` +
+        `3. Extracting spatial placement information\n` +
+        `4. Reconciling with manual and generating corrections\n\n` +
+        `This may take several minutes depending on video length. ` +
+        `The video_enhanced.json will be created when complete.`
+      );
+    } catch (err) {
+      setStatus("error");
+      setMessage(err instanceof Error ? err.message : "Enhancement failed");
     }
   }
 
@@ -598,6 +636,28 @@ export default function IngestPage() {
           </div>
         )}
 
+        {/* ── Video mode ── */}
+        {mode === "video" && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-400">
+              Upload an assembly video to enrich this manual with spatial sub-steps, detailed
+              placement instructions, and corrections derived from the video.
+              The manual must already be ingested.
+            </p>
+
+            <VideoDropzone
+              onFile={(file) => setVideoFile(file)}
+              currentFile={videoFile}
+            />
+
+            {videoFile && (
+              <div className="text-sm text-gray-300 p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                <span className="text-green-400 font-medium">✓ Ready to upload:</span> {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(2)} MB)
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Status messages */}
         {status === "error" && (
           <div className="px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
@@ -616,7 +676,11 @@ export default function IngestPage() {
           disabled={status === "submitting"}
           className="w-full py-3 rounded-lg bg-yellow-400 text-gray-900 font-semibold hover:bg-yellow-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {status === "submitting" ? "Submitting…" : "Start Ingestion"}
+          {status === "submitting"
+            ? "Submitting…"
+            : mode === "video"
+            ? "Upload & Enhance Manual"
+            : "Start Ingestion"}
         </button>
       </form>
     </div>

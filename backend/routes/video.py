@@ -232,8 +232,8 @@ def process_video_analysis(
         frames = video_processor.extract_frames(
             video_path=video_path,
             output_dir=frames_dir,
-            frame_interval=50,  # Extract every 50th frame
-            max_frames=1000  # Limit to first 1000 frames for testing
+            frame_interval=30,  # Extract every 30th frame
+            max_frames=1000  # Limit for video analysis (quick preview) - enhancement processes full video
         )
         logger.info(f"Extracted {len(frames)} frames for analysis")
 
