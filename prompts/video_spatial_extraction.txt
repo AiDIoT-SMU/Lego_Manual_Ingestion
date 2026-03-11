@@ -1,0 +1,67 @@
+You are analyzing LEGO brick placement in a video frame to extract PRECISE SPATIAL INFORMATION.
+
+CONTEXT:
+The user is placing {placement_part} onto {target_part}.
+You will see the frame where this placement action occurs.
+
+LEGO SPATIAL REFERENCE:
+- LEGO bricks connect via "studs" (the round bumps on top of each brick)
+- Standard brick spacing: studs are arranged in a regular grid
+- Positions can be described relative to edges, corners, or other existing parts
+- Count studs from edges or corners for precision (e.g., "3 studs from left edge")
+- Baseplates and larger pieces provide reference grids for counting
+
+SPATIAL TERMINOLOGY:
+- Corners: "top left corner", "bottom right corner", etc.
+- Edges: "left edge", "right edge", "top edge", "bottom edge"
+- Rows/Columns: "top row", "second row from bottom", "left column"
+- Relative positioning: "next to", "adjacent to", "2 studs away from"
+- Orientation: "horizontal" (long axis left-right), "vertical" (long axis up-down)
+
+FRAME TO ANALYZE:
+You will see one or more frames showing the placement action from different moments.
+
+TASK:
+Extract the spatial location where {placement_part} is being placed on {target_part}.
+
+Describe the location using natural language with:
+1. General location (corner, edge, center, specific region)
+2. Stud-level precision when visible ("X studs from [reference point]")
+3. Orientation if the part has directionality (horizontal, vertical, angled)
+4. Relative positioning if placing near other parts
+
+EXAMPLES OF GOOD DESCRIPTIONS:
+- "bottom left corner, 2 studs from left edge and 3 studs from bottom edge"
+- "top row, centered, approximately 4 studs from the left edge"
+- "placed vertically in the right column, 1 stud away from the red brick"
+- "center of the baseplate, aligned with the existing white brick structure"
+
+Return ONLY valid JSON in this exact format:
+{
+  "location": "bottom left corner",
+  "position_detail": "2 studs from left edge, 3 studs from bottom edge",
+  "orientation": null,
+  "relative_to": null,
+  "confidence": 0.9,
+  "reasoning": "The tile is clearly visible in the bottom left area of the baseplate. Based on the stud grid, it appears to be approximately 2-3 studs from both the left and bottom edges."
+}
+
+Fields explanation:
+- location: General area description (required)
+- position_detail: Specific stud count or measurement (use "approximately" if not perfectly clear)
+- orientation: "horizontal", "vertical", "angled", or null if part is symmetrical or default orientation
+- relative_to: Description of nearby part if using relative positioning, otherwise null
+- confidence: 0.0-1.0 (use >0.8 only if stud positions are clearly visible)
+- reasoning: Brief explanation of how you determined the position
+
+If the placement is not clearly visible (hands blocking, camera angle obscured, etc.), return:
+{
+  "location": null,
+  "position_detail": null,
+  "orientation": null,
+  "relative_to": null,
+  "confidence": 0.0,
+  "reasoning": "Hands blocking view of exact placement location"
+}
+
+Do NOT include any text before or after the JSON.

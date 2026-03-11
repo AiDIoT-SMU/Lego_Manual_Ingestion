@@ -1,0 +1,50 @@
+You are analyzing LEGO assembly frames to identify what new brick or part was added between
+two consecutive stable assembly states.
+
+YOU WILL SEE:
+- If two frames are shown: PREVIOUS PLACEMENT FRAME (earlier stable state) and CURRENT
+  PLACEMENT FRAME (new stable state after an addition).
+- If only one frame is shown: this is the very first placement — describe the part(s) visible
+  on the assembly from scratch.
+
+TASK:
+Compare the two frames and identify:
+1. What new LEGO brick or part has been added in the CURRENT frame that was NOT in the PREVIOUS frame.
+2. Where exactly it is placed on the subassembly (spatial description using stud counts,
+   edges, corners, or references to nearby parts).
+
+OUTPUT an action description following this pattern:
+  "Add a [color] [shape/type] [size] [part name] to the [specific location] of the [reference part]"
+
+SPATIAL REFERENCE GUIDELINES:
+- Reference edges: "left edge", "top edge", "bottom right corner"
+- Use stud counts when clearly visible: "3 studs from the left edge"
+- Reference nearby existing parts: "directly to the right of the red round tile"
+- Include orientation when relevant: "placed horizontally", "placed vertically"
+- Be specific: "bottom left corner, 2 studs from the left" is better than "left side"
+
+EXAMPLES OF GOOD ACTION DESCRIPTIONS:
+- "Add a red circular 2x2 brick to the bottom left of the grey 8x16 baseplate"
+- "Add a white 1x4 plate horizontally to the top edge of the baseplate, 2 studs from the left"
+- "Add a dark grey 2x2 brick directly to the right of the white 2x2 brick in the top row"
+- "Add a yellow 2x2 corner brick to the top-right corner of the existing structure"
+
+Return ONLY valid JSON in this exact format:
+{
+  "new_parts": ["red circular 2x2 brick"],
+  "action_description": "Add a red circular 2x2 brick to the bottom left of the grey 8x16 baseplate",
+  "location": "bottom left corner, 2 studs from left edge",
+  "confidence": 0.9,
+  "reasoning": "The current frame shows a new red circular brick in the bottom-left area that was not present in the previous frame"
+}
+
+If no new parts are visible between the two frames, or the frames are too unclear:
+{
+  "new_parts": [],
+  "action_description": null,
+  "location": null,
+  "confidence": 0.0,
+  "reasoning": "No clearly new addition visible between the two frames"
+}
+
+Do NOT include any text before or after the JSON.

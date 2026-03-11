@@ -20,6 +20,14 @@ This system combines two powerful capabilities:
 - ✅ Image folder input with automatic page renaming
 - ✅ Optional image preprocessing (contrast/sharpness enhancement)
 
+### Video Assembly Verification
+- ✅ Video upload and frame extraction (OpenCV, every 50 frames)
+- ✅ VLM-based step detection with multi-image comparison
+- ✅ Part detection with confidence scores and temporal smoothing
+- ✅ Step timeline with clickable timestamps
+- ✅ Parts checklist with first-seen frame references
+- ✅ Background processing with polling status endpoint
+
 ### Digital Twin & CAD Processing
 - ✅ LDraw file parsing and processing
 - ✅ High-fidelity 3D mesh generation (27,540+ vertices per brick)
@@ -106,6 +114,12 @@ Frontend available at: `http://localhost:3000`
 **Via Web UI:**
 Navigate to `http://localhost:3000/ingest`
 
+Four input modes are available in the UI:
+- **URL** — paste a direct link to a PDF; optionally specify instruction pages (e.g. `13-20, 25`)
+- **Upload PDF** — drag & drop or select a local PDF file; optionally specify instruction pages
+- **Upload Images** — upload individual page images and tag each as Instruction, Final Assembly, or Parts Catalog
+- **Video** — upload an assembly video to verify step progress and detect part placement (manual must be ingested first)
+
 **Via API:**
 
 ```bash
@@ -177,14 +191,24 @@ uv run python scripts/view_digital_twin.py
 lego_assembler/
 ├── backend/                 # FastAPI application
 │   ├── routes/             # API endpoints
+│   │   ├── ingestion.py   # Ingest routes
+│   │   ├── video.py       # Video upload & analysis routes
+│   │   └── ...
 │   └── services/           # Business logic
+│       ├── video_processor.py  # Frame extraction (OpenCV)
+│       ├── video_analyzer.py   # VLM orchestration
+│       └── ...
 ├── frontend/               # Next.js frontend
 │   ├── app/
-│   │   ├── ingest/        # Ingestion UI
+│   │   ├── ingest/        # Ingestion UI (URL/PDF/images/video)
 │   │   ├── steps/         # Step viewer
-│   │   └── parts/         # Parts catalog
+│   │   ├── parts/         # Parts catalog
+│   │   └── video-verify/  # Video upload & results viewer
 │   └── lib/
 │       └── api.ts         # Typed API client
+├── prompts/               # VLM prompt templates
+│   ├── video_step_detection.txt
+│   └── video_part_detection.txt
 ├── ingestion/              # VLM processing pipeline
 │   ├── pipeline.py        # Main orchestrator
 │   ├── vlm_extractor.py   # Gemini VLM integration
@@ -299,6 +323,11 @@ DATA_DIR=./data
 - `GET /api/manuals/{manual_id}/steps` - Get all steps
 - `GET /api/manuals/{manual_id}/parts` - Get parts catalog
 - `GET /images/{manual_id}/parts/{filename}` - Serve cropped images
+
+### Video Analysis
+- `POST /api/video/upload` - Upload video and trigger background analysis
+- `GET /api/video/analysis/{manual_id}/{video_id}` - Poll for results or retrieve full analysis
+- `GET /api/video/list/{manual_id}` - List all analyzed videos for a manual
 
 ## Development
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     manual_dir: Path = Path("./data/manuals")
     processed_dir: Path = Path("./data/processed")
     cropped_dir: Path = Path("./data/cropped")
+    videos_dir: Path = Path("./data/videos")
     brick_library_dir: Path = Path("./data/brick_library")
 
     # Backend Configuration

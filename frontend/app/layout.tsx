@@ -43,6 +43,12 @@ export default function RootLayout({
             >
               Digital Twin
             </a>
+            <a
+              href="/video-verify"
+              className="text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              Video Verify
+            </a>
           </div>
         </nav>
         <main className="max-w-5xl mx-auto px-6 py-10">{children}</main>
