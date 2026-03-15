@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # VLM Configuration (single model, no fallbacks)
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = None
     vlm_model: str = "gemini/gemini-robotics-er-1.5-preview"
     vlm_max_retries: int = 3
     vlm_timeout: int = 60  # seconds

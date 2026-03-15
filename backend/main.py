@@ -10,7 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 from config.settings import get_settings
-from backend.routes import ingestion, steps, parts, digital_twin
+from backend.routes import ingestion, steps, parts, digital_twin, assembly_analysis
 
 
 # Initialize settings
@@ -77,6 +77,11 @@ app.include_router(
     digital_twin.router,
     prefix="/api",
     tags=["Digital Twin"]
+)
+app.include_router(
+    assembly_analysis.router,
+    prefix="/api",
+    tags=["Assembly Analysis"]
 )
 
 

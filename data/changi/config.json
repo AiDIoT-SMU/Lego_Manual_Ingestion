@@ -1,0 +1,8 @@
+{
+  "id": "changi",
+  "label": "Changi",
+  "dependencies_path": "data/changi/input/sg50_dependencies.json",
+  "anchors_dir": "data/changi/anchors_video",
+  "ground_truth_path": "data/changi/annotations/ground_truth.json",
+  "manual_pages_dir": "data/changi/manual_pages"
+}

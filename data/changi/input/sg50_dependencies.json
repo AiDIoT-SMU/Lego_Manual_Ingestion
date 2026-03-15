@@ -1,0 +1,1439 @@
+{
+  "nodes": {
+    "1": {
+      "step_number": 1,
+      "step_description": "Create the base row on the gray baseplate and place the red round tile.",
+      "parts_required": [
+        {
+          "description": "red round tile with printing",
+          "color": "red",
+          "shape": "round tile",
+          "quantity": 1,
+          "sam3_prompt": "red round LEGO tile"
+        },
+        {
+          "description": "white brick",
+          "color": "white",
+          "shape": "rectangular brick",
+          "quantity": 4,
+          "sam3_prompt": "white rectangular LEGO brick"
+        },
+        {
+          "description": "dark gray brick",
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "quantity": 3,
+          "sam3_prompt": "dark gray rectangular LEGO brick"
+        },
+        {
+          "description": "gray baseplate",
+          "color": "gray",
+          "shape": "flat plate",
+          "quantity": 1,
+          "sam3_prompt": "gray flat LEGO plate"
+        }
+      ],
+      "existing_assembly": "large gray flat baseplate",
+      "assembled_product": {
+        "sam3_prompt": "gray plate with a row of bricks and red tile"
+      },
+      "actions": [
+        {
+          "action_verb": "place",
+          "target": "red round tile",
+          "destination": "bottom left corner of baseplate",
+          "orientation": "flat on surface"
+        },
+        {
+          "action_verb": "place",
+          "target": "alternating white and dark gray bricks",
+          "destination": "center of baseplate",
+          "orientation": "forming a single row"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "center and lower left",
+        "alignment": "row of bricks centered horizontally, tile at corner"
+      },
+      "dependencies": null,
+      "notes": null,
+      "subassembly_hint": {
+        "is_new_subassembly": true,
+        "name": "ground floor structure",
+        "description": "building the base layer of the airport terminal",
+        "continues_previous": false
+      },
+      "_source_page_idx": 0,
+      "_source_page_paths": [
+        "data/changi/anchors/step_01_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        }
+      ]
+    },
+    "2": {
+    "step_number": 2,
+    "step_description": "Cap the raised row by placing dark gray 2x2 plates and black flat tiles.",
+    "parts_required": [
+      {
+        "description": "dark gray plate (2x2)",
+        "color": "dark gray",
+        "shape": "flat square plate",
+        "quantity": 3,
+        "sam3_prompt": "dark gray 2x2 LEGO plate"
+      },
+      {
+        "description": "black flat tile",
+        "color": "black",
+        "shape": "flat rectangular tile",
+        "quantity": 4,
+        "sam3_prompt": "black flat LEGO tile"
+      }
+    ],
+    "existing_assembly": "gray baseplate with white control tower and dark gray building sections",
+    "assembled_product": {
+      "sam3_prompt": "LEGO airport base with tower and black tiles"
+    },
+    "actions": [
+      {
+        "action_verb": "place",
+        "target": "dark gray plates (2x2)",
+        "destination": "on top of the dark gray bricks",
+        "orientation": "on the row of bricks structure"
+      },
+      {
+        "action_verb": "place",
+        "target": "black tiles",
+        "destination": "on top of the white bricks",
+        "orientation": "on the row of bricks structure"
+      }
+    ],
+    "spatial_relationships": {
+      "position": "top",
+      "alignment": "aligned with studs on the respective destination bricks, forming a new layer on top of the existing row"
+    },
+    "dependencies": "step 1 completion",
+    "notes": "Add the gray (2x2) plates and black tiles to form a new layer on top of the existing row.",
+    "subassembly_hint": {
+      "is_new_subassembly": false,
+      "name": null,
+      "description": "adding a new layer to the existing row of bricks",
+      "continues_previous": true
+    },
+    "_source_page_idx": 1,
+    "_source_page_paths": [
+      "data/changi/anchors/step_02_anchor.jpg"
+    ],
+    "cumulative_parts": [
+      {
+        "color": "dark gray",
+        "shape": "rectangular brick",
+        "description": "dark gray brick",
+        "quantity": 3
+      },
+      {
+        "color": "gray",
+        "shape": "flat plate",
+        "description": "gray baseplate",
+        "quantity": 1
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square plate",
+        "description": "dark gray plate (2x2)",
+        "quantity": 3
+      },
+      {
+        "color": "black",
+        "shape": "flat rectangular tile",
+        "description": "black flat tile",
+        "quantity": 4
+      },
+      {
+        "color": "red",
+        "shape": "round tile",
+        "description": "red round tile with printing",
+        "quantity": 1
+      },
+      {
+        "color": "white",
+        "shape": "rectangular brick",
+        "description": "white brick",
+        "quantity": 4
+      }
+    ]
+  },
+    "3": {
+    "step_number": 3,
+    "step_description": "Add ground details with green plates, add the white round cylinder, and cap the row with dark gray tiles.",
+    "parts_required": [
+      {
+        "description": "green plate (1x4)",
+        "color": "green",
+        "shape": "flat rectangular plate",
+        "quantity": 3,
+        "sam3_prompt": "green 1x4 LEGO plate"
+      },
+      {
+        "description": "white round cylinder brick (2x2)",
+        "color": "white",
+        "shape": "round cylindrical brick",
+        "quantity": 1,
+        "sam3_prompt": "white 2x2 round LEGO brick cylinder"
+      },
+      {
+        "description": "dark gray tile",
+        "color": "dark gray",
+        "shape": "flat square tile",
+        "quantity": 3,
+        "sam3_prompt": "dark gray LEGO tile"
+      }
+    ],
+    "existing_assembly": "Base plate with raised structure of white and gray bricks from previous step.",
+    "assembled_product": {
+      "sam3_prompt": "LEGO airport base with green plates, dark gray tiles, and a white round piece"
+    },
+    "actions": [
+      {
+        "action_verb": "place",
+        "target": "green plates (1x4)",
+        "destination": "on the gray baseplate",
+        "orientation": "three separate strips placed in the open area in front of the raised structure"
+      },
+      {
+        "action_verb": "place",
+        "target": "white round cylinder brick (2x2)",
+        "destination": "on the gray baseplate",
+        "orientation": "near the front-left area (close to the red round tile)"
+      },
+      {
+        "action_verb": "place",
+        "target": "dark gray tiles",
+        "destination": "on top of the dark gray plates",
+        "orientation": "forming a flat top surface on the row of bricks"
+      }
+    ],
+    "spatial_relationships": {
+      "position": "green pieces on baseplate front area; dark gray tiles on top of the raised row",
+      "alignment": "aligned with studs on the baseplate and the top of the raised structure"
+    },
+    "dependencies": "Step 2",
+    "notes": "Step 3 adds three green strips on the ground, one white round cylinder near the front-left, and caps the raised structure with three dark gray 2x2 tiles.",
+    "subassembly_hint": {
+      "is_new_subassembly": false,
+      "name": null,
+      "description": "Adding ground markings and finishing the top surface of the raised structure",
+      "continues_previous": true
+    },
+    "_source_page_idx": 2,
+    "_source_page_paths": [
+      "data/changi/anchors/step_03_anchor.jpg"
+    ],
+    "cumulative_parts": [
+      {
+        "color": "dark gray",
+        "shape": "rectangular brick",
+        "description": "dark gray brick",
+        "quantity": 3
+      },
+      {
+        "color": "gray",
+        "shape": "flat plate",
+        "description": "gray baseplate",
+        "quantity": 1
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square plate",
+        "description": "dark gray plate (2x2)",
+        "quantity": 3
+      },
+      {
+        "color": "black",
+        "shape": "flat rectangular tile",
+        "description": "black flat tile",
+        "quantity": 4
+      },
+      {
+        "color": "green",
+        "shape": "flat rectangular plate",
+        "description": "green plate (1x4)",
+        "quantity": 3
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square tile",
+        "description": "dark gray tile",
+        "quantity": 3
+      },
+      {
+        "color": "white",
+        "shape": "round cylindrical brick",
+        "description": "white round cylinder brick (2x2)",
+        "quantity": 1
+      },
+      {
+        "color": "red",
+        "shape": "round tile",
+        "description": "red round tile with printing",
+        "quantity": 1
+      },
+      {
+        "color": "white",
+        "shape": "rectangular brick",
+        "description": "white brick",
+        "quantity": 4
+      }
+    ]
+  },
+  "4": {
+    "step_number": 4,
+    "step_description": "Stack white round cylinder bricks to build the tall control tower.",
+    "parts_required": [
+      {
+        "description": "white round cylinder brick (2x2)",
+        "color": "white",
+        "shape": "round cylindrical brick",
+        "quantity": 6,
+        "sam3_prompt": "white 2x2 round LEGO brick cylinder"
+      }
+    ],
+    "existing_assembly": "Gray baseplate with raised structure capped by dark gray tiles, three green 1x4 plates on the ground, and one white 2x2 round cylinder near the front-left.",
+    "assembled_product": {
+      "sam3_prompt": "LEGO airport base with a tall white round tower"
+    },
+    "actions": [
+      {
+        "action_verb": "stack",
+        "target": "white round cylinder bricks (2x2)",
+        "destination": "on top of the existing white round cylinder at the front-left",
+        "orientation": "aligned vertically to form a tall tower"
+      }
+    ],
+    "spatial_relationships": {
+      "position": "front-left",
+      "alignment": "cylinders stacked concentrically forming a vertical column"
+    },
+    "dependencies": "Step 3",
+    "notes": "Stack the 6 white round cylinders onto the existing white cylinder to form the tall control tower.",
+    "subassembly_hint": {
+      "is_new_subassembly": false,
+      "name": "control tower",
+      "description": "building up the tower by stacking round cylinder bricks",
+      "continues_previous": true
+    },
+    "_source_page_idx": 3,
+    "_source_page_paths": [
+      "data/changi/anchors/step_04_anchor.jpg"
+    ],
+    "cumulative_parts": [
+      {
+        "color": "dark gray",
+        "shape": "rectangular brick",
+        "description": "dark gray brick",
+        "quantity": 3
+      },
+      {
+        "color": "gray",
+        "shape": "flat plate",
+        "description": "gray baseplate",
+        "quantity": 1
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square plate",
+        "description": "dark gray plate (2x2)",
+        "quantity": 3
+      },
+      {
+        "color": "black",
+        "shape": "flat rectangular tile",
+        "description": "black flat tile",
+        "quantity": 4
+      },
+      {
+        "color": "green",
+        "shape": "flat rectangular plate",
+        "description": "green plate (1x4)",
+        "quantity": 3
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square tile",
+        "description": "dark gray tile",
+        "quantity": 3
+      },
+      {
+        "color": "white",
+        "shape": "round cylindrical brick",
+        "description": "white round cylinder brick (2x2)",
+        "quantity": 7
+      },
+      {
+        "color": "red",
+        "shape": "round tile",
+        "description": "red round tile with printing",
+        "quantity": 1
+      },
+      {
+        "color": "white",
+        "shape": "rectangular brick",
+        "description": "white brick",
+        "quantity": 4
+      }
+    ]
+  },
+   "5": {
+    "step_number": 5,
+    "step_description": "Build the separate tower-cap core by stacking a dark gray plate, white cylinder, and dark gray plate on the white round plate.",
+    "parts_required": [
+      {
+        "description": "white round plate (flat circle, 12 studs)",
+        "color": "white",
+        "shape": "round flat plate",
+        "quantity": 1,
+        "sam3_prompt": "white flat round LEGO plate"
+      },
+      {
+        "description": "dark gray plate (2x2)",
+        "color": "dark gray",
+        "shape": "flat square plate",
+        "quantity": 2,
+        "sam3_prompt": "dark gray 2x2 LEGO plate"
+      },
+      {
+        "description": "white round cylinder brick (2x2)",
+        "color": "white",
+        "shape": "round cylindrical brick",
+        "quantity": 1,
+        "sam3_prompt": "white 2x2 round LEGO brick cylinder"
+      }
+    ],
+    "existing_assembly": "Gray baseplate with raised structure capped by dark gray tiles, three green 1x4 plates on the ground, and a tall white round tower at the front-left.",
+    "assembled_product": {
+      "sam3_prompt": "independent round subassembly: white round base with dark gray plates and white cylinder"
+    },
+    "actions": [
+      {
+        "action_verb": "place",
+        "target": "dark gray plate (2x2)",
+        "destination": "on top of the white round plate (flat circle, 12 studs)",
+        "orientation": "centered on the round plate"
+      },
+      {
+        "action_verb": "place",
+        "target": "white round cylinder brick (2x2)",
+        "destination": "on top of the dark gray plate (2x2)",
+        "orientation": "centered and aligned vertically"
+      },
+      {
+        "action_verb": "place",
+        "target": "dark gray plate (2x2)",
+        "destination": "on top of the white round cylinder brick (2x2)",
+        "orientation": "centered to cap the cylinder"
+      }
+    ],
+    "spatial_relationships": {
+      "position": "independent subassembly",
+      "alignment": "centered, concentric stacking (white round plate → dark gray 2x2 plate → white cylinder → dark gray 2x2 plate)"
+    },
+    "dependencies": "step 4 completion",
+    "notes": "Build a small round top section.",
+    "subassembly_hint": {
+      "is_new_subassembly": true,
+      "name": "tower cap subassembly",
+      "description": "independent round subassembly built separately for later attachment",
+      "continues_previous": false
+    },
+    "_source_page_idx": 4,
+    "_source_page_paths": [
+      "data/changi/anchors/step_05_anchor.jpg"
+    ],
+    "cumulative_parts": [
+      {
+        "color": "dark gray",
+        "shape": "rectangular brick",
+        "description": "dark gray brick",
+        "quantity": 3
+      },
+      {
+        "color": "gray",
+        "shape": "flat plate",
+        "description": "gray baseplate",
+        "quantity": 1
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square plate",
+        "description": "dark gray plate (2x2)",
+        "quantity": 5
+      },
+      {
+        "color": "black",
+        "shape": "flat rectangular tile",
+        "description": "black flat tile",
+        "quantity": 4
+      },
+      {
+        "color": "green",
+        "shape": "flat rectangular plate",
+        "description": "green plate (1x4)",
+        "quantity": 3
+      },
+      {
+        "color": "dark gray",
+        "shape": "flat square tile",
+        "description": "dark gray tile",
+        "quantity": 3
+      },
+      {
+        "color": "white",
+        "shape": "round cylindrical brick",
+        "description": "white round cylinder brick (2x2)",
+        "quantity": 8
+      },
+      {
+        "color": "white",
+        "shape": "round flat plate",
+        "description": "white round plate (flat circle, 12 studs)",
+        "quantity": 1
+      },
+      {
+        "color": "red",
+        "shape": "round tile",
+        "description": "red round tile with printing",
+        "quantity": 1
+      },
+      {
+        "color": "white",
+        "shape": "rectangular brick",
+        "description": "white brick",
+        "quantity": 4
+      }
+    ]
+  },
+    "6": {
+      "step_number": 6,
+      "step_description": "Build four side modules (white side-stud brick + two translucent black slopes) and attach them around the round plate.",
+      "parts_required": [
+        {
+          "description": "white brick with side studs",
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "quantity": 4,
+          "sam3_prompt": "white LEGO brick with side studs"
+        },
+        {
+          "description": "translucent black slope brick",
+          "color": "translucent black",
+          "shape": "slope brick",
+          "quantity": 8,
+          "sam3_prompt": "translucent black LEGO slope brick"
+        }
+      ],
+      "existing_assembly": "Tower cap subassembly from step 5: white round plate (flat circle, 12 studs) with centered dark gray and white stacked pieces.",
+      "assembled_product": {
+        "sam3_prompt": "tower cap with four white bricks with side studs each carrying two translucent black slope bricks around the white round plate"
+      },
+      "actions": [
+        {
+          "action_verb": "place",
+          "target": "two translucent black slope bricks",
+          "destination": "on the side studs of one white brick with side studs",
+          "orientation": "one on each side to form a side module"
+        },
+        {
+          "action_verb": "repeat",
+          "target": "white brick with side studs + translucent black side module",
+          "destination": "three more times to make four identical side modules",
+          "orientation": "all modules oriented like the reference image"
+        },
+        {
+          "action_verb": "attach",
+          "target": "four side modules",
+          "destination": "onto the four 2-stud slots around the white round plate (flat circle, 12 studs)",
+          "orientation": "one module per side around the circle"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "around the white round plate (flat circle, 12 studs)",
+        "alignment": "four modules distributed to the four side slots; each module has two translucent black slopes on a white brick"
+      },
+      "dependencies": "step 5 completion",
+      "notes": "Build four identical side modules first, then attach them around the round plate.",
+      "subassembly_hint": {
+        "is_new_subassembly": false,
+        "name": "tower cap subassembly",
+        "description": "adding four white-brick side modules with translucent black slopes around the round plate",
+        "continues_previous": true
+      },
+      "_source_page_idx": 5,
+      "_source_page_paths": [
+        "data/changi/anchors/step_06_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square plate",
+          "description": "dark gray plate (2x2)",
+          "quantity": 5
+        },
+        {
+          "color": "black",
+          "shape": "flat rectangular tile",
+          "description": "black flat tile",
+          "quantity": 4
+        },
+        {
+          "color": "green",
+          "shape": "flat rectangular plate",
+          "description": "green plate (1x4)",
+          "quantity": 3
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square tile",
+          "description": "dark gray tile",
+          "quantity": 3
+        },
+        {
+          "color": "white",
+          "shape": "round cylindrical brick",
+          "description": "white round cylinder brick (2x2)",
+          "quantity": 8
+        },
+        {
+          "color": "white",
+          "shape": "round flat plate",
+          "description": "white round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        },
+        {
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "description": "white brick with side studs",
+          "quantity": 4
+        },
+        {
+          "color": "translucent black",
+          "shape": "slope brick",
+          "description": "translucent black slope brick",
+          "quantity": 8
+        }
+      ]
+    },
+    "7": {
+      "step_number": 7,
+      "step_description": "Place the gray round plate with four studs on top of the tower-cap subassembly.",
+      "parts_required": [
+        {
+          "description": "gray round plate with four studs",
+          "color": "gray",
+          "shape": "round plate",
+          "quantity": 1,
+          "sam3_prompt": "gray round LEGO plate with four studs"
+        }
+      ],
+      "existing_assembly": "Tower cap subassembly from step 6 with four white side modules and translucent black slopes around the white round plate.",
+      "assembled_product": {
+        "sam3_prompt": "tower cap with a gray round top plate"
+      },
+      "actions": [
+        {
+          "action_verb": "place",
+          "target": "gray round plate with four studs",
+          "destination": "on top of the existing tower cap assembly",
+          "orientation": "centered so the four studs face upward"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "top center",
+        "alignment": "centered on the round cap assembly"
+      },
+      "dependencies": "step 6 completion",
+      "notes": "Attach the gray round top plate to cap the four side modules.",
+      "subassembly_hint": {
+        "is_new_subassembly": false,
+        "name": "tower cap subassembly",
+        "description": "adding the gray round top plate to the tower cap",
+        "continues_previous": true
+      },
+      "_source_page_idx": 6,
+      "_source_page_paths": [
+        "data/changi/anchors/step_07_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square plate",
+          "description": "dark gray plate (2x2)",
+          "quantity": 5
+        },
+        {
+          "color": "black",
+          "shape": "flat rectangular tile",
+          "description": "black flat tile",
+          "quantity": 4
+        },
+        {
+          "color": "green",
+          "shape": "flat rectangular plate",
+          "description": "green plate (1x4)",
+          "quantity": 3
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square tile",
+          "description": "dark gray tile",
+          "quantity": 3
+        },
+        {
+          "color": "white",
+          "shape": "round cylindrical brick",
+          "description": "white round cylinder brick (2x2)",
+          "quantity": 8
+        },
+        {
+          "color": "white",
+          "shape": "round flat plate",
+          "description": "white round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        },
+        {
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "description": "white brick with side studs",
+          "quantity": 4
+        },
+        {
+          "color": "translucent black",
+          "shape": "slope brick",
+          "description": "translucent black slope brick",
+          "quantity": 8
+        },
+        {
+          "color": "gray",
+          "shape": "round plate",
+          "description": "gray round plate with four studs",
+          "quantity": 1
+        }
+      ]
+    },
+    "8": {
+      "step_number": 8,
+      "step_description": "Place the black round plate (flat circle, 12 studs) on top of the gray round plate.",
+      "parts_required": [
+        {
+          "description": "black round plate (flat circle, 12 studs)",
+          "color": "black",
+          "shape": "round flat plate",
+          "quantity": 1,
+          "sam3_prompt": "black flat round LEGO plate"
+        }
+      ],
+      "existing_assembly": "Tower cap assembly from step 7 with a gray round plate with four studs.",
+      "assembled_product": {
+        "sam3_prompt": "tower cap with black round plate on top"
+      },
+      "actions": [
+        {
+          "action_verb": "place",
+          "target": "black round plate (flat circle, 12 studs)",
+          "destination": "on top of the gray round plate with four studs",
+          "orientation": "centered and aligned to the top studs"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "top center",
+        "alignment": "centered on the gray round top plate"
+      },
+      "dependencies": "step 7 completion",
+      "notes": "Add the black round plate (flat circle, 12 studs) as the next top layer.",
+      "subassembly_hint": {
+        "is_new_subassembly": false,
+        "name": "tower cap subassembly",
+        "description": "adding the black round top layer",
+        "continues_previous": true
+      },
+      "_source_page_idx": 6,
+      "_source_page_paths": [
+        "data/changi/anchors/step_08_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square plate",
+          "description": "dark gray plate (2x2)",
+          "quantity": 5
+        },
+        {
+          "color": "black",
+          "shape": "flat rectangular tile",
+          "description": "black flat tile",
+          "quantity": 4
+        },
+        {
+          "color": "green",
+          "shape": "flat rectangular plate",
+          "description": "green plate (1x4)",
+          "quantity": 3
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square tile",
+          "description": "dark gray tile",
+          "quantity": 3
+        },
+        {
+          "color": "white",
+          "shape": "round cylindrical brick",
+          "description": "white round cylinder brick (2x2)",
+          "quantity": 8
+        },
+        {
+          "color": "white",
+          "shape": "round flat plate",
+          "description": "white round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        },
+        {
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "description": "white brick with side studs",
+          "quantity": 4
+        },
+        {
+          "color": "translucent black",
+          "shape": "slope brick",
+          "description": "translucent black slope brick",
+          "quantity": 8
+        },
+        {
+          "color": "gray",
+          "shape": "round plate",
+          "description": "gray round plate with four studs",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round flat plate",
+          "description": "black round plate (flat circle, 12 studs)",
+          "quantity": 1
+        }
+      ]
+    },
+    "9": {
+      "step_number": 9,
+      "step_description": "Place the black round tile with central stud at the center of the black round plate.",
+      "parts_required": [
+        {
+          "description": "black round tile with central stud",
+          "color": "black",
+          "shape": "round tile",
+          "quantity": 1,
+          "sam3_prompt": "black round LEGO tile with central stud"
+        }
+      ],
+      "existing_assembly": "Tower cap assembly from step 8 with a black round plate (flat circle, 12 studs).",
+      "assembled_product": {
+        "sam3_prompt": "tower cap with black round tile with central stud on top"
+      },
+      "actions": [
+        {
+          "action_verb": "place",
+          "target": "black round tile with central stud",
+          "destination": "on top of the black round plate (flat circle, 12 studs)",
+          "orientation": "centered on the top surface"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "top center",
+        "alignment": "centered over the black round plate"
+      },
+      "dependencies": "step 8 completion",
+      "notes": "Cap the black round plate with the black round tile with central stud.",
+      "subassembly_hint": {
+        "is_new_subassembly": false,
+        "name": "tower cap subassembly",
+        "description": "adding the black round top tile",
+        "continues_previous": true
+      },
+      "_source_page_idx": 6,
+      "_source_page_paths": [
+        "data/changi/anchors/step_09_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square plate",
+          "description": "dark gray plate (2x2)",
+          "quantity": 5
+        },
+        {
+          "color": "black",
+          "shape": "flat rectangular tile",
+          "description": "black flat tile",
+          "quantity": 4
+        },
+        {
+          "color": "green",
+          "shape": "flat rectangular plate",
+          "description": "green plate (1x4)",
+          "quantity": 3
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square tile",
+          "description": "dark gray tile",
+          "quantity": 3
+        },
+        {
+          "color": "white",
+          "shape": "round cylindrical brick",
+          "description": "white round cylinder brick (2x2)",
+          "quantity": 8
+        },
+        {
+          "color": "white",
+          "shape": "round flat plate",
+          "description": "white round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        },
+        {
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "description": "white brick with side studs",
+          "quantity": 4
+        },
+        {
+          "color": "translucent black",
+          "shape": "slope brick",
+          "description": "translucent black slope brick",
+          "quantity": 8
+        },
+        {
+          "color": "gray",
+          "shape": "round plate",
+          "description": "gray round plate with four studs",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round flat plate",
+          "description": "black round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round tile",
+          "description": "black round tile with central stud",
+          "quantity": 1
+        }
+      ]
+    },
+    "10": {
+      "step_number": 10,
+      "step_description": "Place the gray round tile with central stud, then place the tan round brick on top.",
+      "parts_required": [
+        {
+          "description": "gray round tile with central stud",
+          "color": "gray",
+          "shape": "round tile",
+          "quantity": 1,
+          "sam3_prompt": "gray round LEGO tile with central stud"
+        },
+        {
+          "description": "round brick",
+          "color": "tan",
+          "shape": "round brick",
+          "quantity": 1,
+          "sam3_prompt": "tan round LEGO brick"
+        }
+      ],
+      "existing_assembly": "Tower cap assembly from step 9 with a black round tile with central stud.",
+      "assembled_product": {
+        "sam3_prompt": "tower cap with gray round tile and round brick top detail"
+      },
+      "actions": [
+        {
+          "action_verb": "place",
+          "target": "gray round tile with central stud",
+          "destination": "on top of the black round tile with central stud",
+          "orientation": "centered at the top"
+        },
+        {
+          "action_verb": "place",
+          "target": "round brick",
+          "destination": "on top of the gray round tile with central stud",
+          "orientation": "centered as the top detail"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "center top",
+        "alignment": "both parts stacked concentrically at the middle"
+      },
+      "dependencies": "step 9 completion",
+      "notes": "Complete the top-center detail with the gray round tile and round brick.",
+      "subassembly_hint": {
+        "is_new_subassembly": false,
+        "name": "tower cap subassembly",
+        "description": "adding the final round top-center detail",
+        "continues_previous": true
+      },
+      "_source_page_idx": 6,
+      "_source_page_paths": [
+        "data/changi/anchors/step_10_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square plate",
+          "description": "dark gray plate (2x2)",
+          "quantity": 5
+        },
+        {
+          "color": "black",
+          "shape": "flat rectangular tile",
+          "description": "black flat tile",
+          "quantity": 4
+        },
+        {
+          "color": "green",
+          "shape": "flat rectangular plate",
+          "description": "green plate (1x4)",
+          "quantity": 3
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square tile",
+          "description": "dark gray tile",
+          "quantity": 3
+        },
+        {
+          "color": "white",
+          "shape": "round cylindrical brick",
+          "description": "white round cylinder brick (2x2)",
+          "quantity": 8
+        },
+        {
+          "color": "white",
+          "shape": "round flat plate",
+          "description": "white round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        },
+        {
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "description": "white brick with side studs",
+          "quantity": 4
+        },
+        {
+          "color": "translucent black",
+          "shape": "slope brick",
+          "description": "translucent black slope brick",
+          "quantity": 8
+        },
+        {
+          "color": "gray",
+          "shape": "round plate",
+          "description": "gray round plate with four studs",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round flat plate",
+          "description": "black round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round tile",
+          "description": "black round tile with central stud",
+          "quantity": 1
+        },
+        {
+          "color": "gray",
+          "shape": "round tile",
+          "description": "gray round tile with central stud",
+          "quantity": 1
+        },
+        {
+          "color": "tan",
+          "shape": "round brick",
+          "description": "round brick",
+          "quantity": 1
+        }
+      ]
+    },
+    "11": {
+      "step_number": 11,
+      "step_description": "Attach the completed tower-cap subassembly onto the top of the main board white tower.",
+      "parts_required": [
+        {
+          "description": "completed tower cap subassembly",
+          "color": "mixed",
+          "shape": "subassembly",
+          "quantity": 1,
+          "sam3_prompt": "completed round tower cap subassembly"
+        }
+      ],
+      "existing_assembly": "Main board assembly with the white cylindrical tower built, and the completed tower cap subassembly from step 10 available.",
+      "assembled_product": {
+        "sam3_prompt": "main board with completed round tower cap attached on top of the white tower"
+      },
+      "actions": [
+        {
+          "action_verb": "attach",
+          "target": "completed tower cap subassembly",
+          "destination": "on top of the existing white tower on the main board",
+          "orientation": "centered and aligned to the top connection point of the tower"
+        }
+      ],
+      "spatial_relationships": {
+        "position": "top of main tower",
+        "alignment": "subassembly sits concentrically on the tower top"
+      },
+      "dependencies": "step 10 completion and step 4 completion",
+      "notes": "This step integrates the separately built tower cap onto the main board tower.",
+      "subassembly_hint": {
+        "is_new_subassembly": false,
+        "name": "tower cap subassembly",
+        "description": "mounting the completed tower cap onto the main tower structure",
+        "continues_previous": false
+      },
+      "_source_page_idx": 6,
+      "_source_page_paths": [
+        "data/changi/anchors/step_11_anchor.jpg"
+      ],
+      "cumulative_parts": [
+        {
+          "color": "dark gray",
+          "shape": "rectangular brick",
+          "description": "dark gray brick",
+          "quantity": 3
+        },
+        {
+          "color": "gray",
+          "shape": "flat plate",
+          "description": "gray baseplate",
+          "quantity": 1
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square plate",
+          "description": "dark gray plate (2x2)",
+          "quantity": 5
+        },
+        {
+          "color": "black",
+          "shape": "flat rectangular tile",
+          "description": "black flat tile",
+          "quantity": 4
+        },
+        {
+          "color": "green",
+          "shape": "flat rectangular plate",
+          "description": "green plate (1x4)",
+          "quantity": 3
+        },
+        {
+          "color": "dark gray",
+          "shape": "flat square tile",
+          "description": "dark gray tile",
+          "quantity": 3
+        },
+        {
+          "color": "white",
+          "shape": "round cylindrical brick",
+          "description": "white round cylinder brick (2x2)",
+          "quantity": 8
+        },
+        {
+          "color": "white",
+          "shape": "round flat plate",
+          "description": "white round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "red",
+          "shape": "round tile",
+          "description": "red round tile with printing",
+          "quantity": 1
+        },
+        {
+          "color": "white",
+          "shape": "rectangular brick",
+          "description": "white brick",
+          "quantity": 4
+        },
+        {
+          "color": "white",
+          "shape": "brick 1x2 with side studs",
+          "description": "white brick with side studs",
+          "quantity": 4
+        },
+        {
+          "color": "translucent black",
+          "shape": "slope brick",
+          "description": "translucent black slope brick",
+          "quantity": 8
+        },
+        {
+          "color": "gray",
+          "shape": "round plate",
+          "description": "gray round plate with four studs",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round flat plate",
+          "description": "black round plate (flat circle, 12 studs)",
+          "quantity": 1
+        },
+        {
+          "color": "black",
+          "shape": "round tile",
+          "description": "black round tile with central stud",
+          "quantity": 1
+        },
+        {
+          "color": "gray",
+          "shape": "round tile",
+          "description": "gray round tile with central stud",
+          "quantity": 1
+        },
+        {
+          "color": "tan",
+          "shape": "round brick",
+          "description": "round brick",
+          "quantity": 1
+        }
+      ]
+    }
+  },
+  "edges": {
+    "1": [
+      2
+    ],
+    "2": [
+      3
+    ],
+    "3": [
+      4
+    ],
+    "4": [
+      5,
+      11
+    ],
+    "5": [
+      6
+    ],
+    "6": [
+      7
+    ],
+    "7": [
+      8
+    ],
+    "8": [
+      9
+    ],
+    "9": [
+      10
+    ],
+    "10": [
+      11
+    ],
+    "11": []
+  },
+  "reverse_edges": {
+    "2": [
+      1
+    ],
+    "3": [
+      2
+    ],
+    "4": [
+      3
+    ],
+    "5": [
+      4
+    ],
+    "6": [
+      5
+    ],
+    "7": [
+      6
+    ],
+    "8": [
+      7
+    ],
+    "9": [
+      8
+    ],
+    "10": [
+      9
+    ],
+    "11": [
+      10,
+      4
+    ],
+    "1": []
+  },
+  "subassemblies": [],
+  "build_order": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ]
+}
