@@ -43,6 +43,12 @@ export default function RootLayout({
             >
               Digital Twin
             </a>
+            <a
+              href="/assembly-analysis"
+              className="text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              Analysis
+            </a>
           </div>
         </nav>
         <main className="max-w-5xl mx-auto px-6 py-10">{children}</main>

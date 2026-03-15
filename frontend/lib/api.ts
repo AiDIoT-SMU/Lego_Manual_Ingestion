@@ -87,6 +87,78 @@ export interface DigitalTwin {
   steps: DigitalTwinStep[];
 }
 
+export interface AnalysisItem {
+  id: string;
+  label: string;
+  dependencies_path: string;
+  anchors_dir: string;
+  ground_truth_path: string | null;
+  manual_pages_dir: string | null;
+  precomputed_result_path: string | null;
+  config_path: string | null;
+  warnings: string[];
+}
+
+export interface AnalysisGroundTruthDetails {
+  step: string | null;
+  correct: boolean | null;
+  within_one: boolean | null;
+  is_matchable: boolean;
+}
+
+export interface AnalysisProgressDetails {
+  current_step: number;
+  total_steps: number;
+  ratio: number;
+  build_order: number[];
+}
+
+export interface AnalysisTraceDetails {
+  gate_triggered: boolean | null;
+  gate_similarity: number | null;
+  vlm_called: boolean | null;
+  vlm_confidence: number | null;
+  vlm_reasoning: string | null;
+  non_progress_reason: string | null;
+  non_progress_reason_raw: string | null;
+  non_progress_reason_source: string | null;
+  non_progress_trigger: string | null;
+  non_progress_visible: boolean | null;
+  error_detection_ran: boolean | null;
+  error_detection_source: string | null;
+  error_detection_result: Record<string, unknown> | null;
+  error_detected: boolean | null;
+  completed_action_detected: boolean | null;
+  processing_time_ms: number | null;
+}
+
+export interface AnalysisTimelineRecord {
+  timestamp_sec: number;
+  detected_step: number;
+  next_step: number;
+  confidence: number;
+  method: string;
+  completed_label: string | null;
+  guidance_label: string | null;
+  progress: AnalysisProgressDetails;
+  ground_truth: AnalysisGroundTruthDetails;
+  non_progress_reason: string;
+  error_summary_lines: string[];
+  thumbnail_path: string | null;
+  trace: AnalysisTraceDetails;
+}
+
+export interface AnalysisResult {
+  analysis_id: string;
+  item: AnalysisItem;
+  mode: string;
+  warnings: string[];
+  per_second_results: Record<string, unknown>[];
+  timeline: AnalysisTimelineRecord[];
+  video_path: string;
+  metadata: Record<string, unknown>;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
@@ -187,4 +259,37 @@ export async function ingestImages(
   }
 
   return res.json();
+}
+
+export async function fetchAnalysisItems(): Promise<{ items: AnalysisItem[] }> {
+  const res = await fetch(`${API_BASE}/api/assembly/items`);
+  if (!res.ok) throw new Error(`Failed to fetch analysis items: ${res.status}`);
+  return res.json();
+}
+
+export async function analyzeAssemblyVideo(
+  itemId: string,
+  videoFile: File,
+  detailsJsonFile: File
+): Promise<AnalysisResult> {
+  const form = new FormData();
+  form.append("item_id", itemId);
+  form.append("video_file", videoFile);
+  form.append("details_json_file", detailsJsonFile);
+
+  const res = await fetch(`${API_BASE}/api/assembly/analyze`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `Server error ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export function analysisAssetUrl(path: string): string {
+  return `${API_BASE}/api/assembly/asset?path=${encodeURIComponent(path)}`;
 }
