@@ -1,7 +1,7 @@
 """
 Test script for Video Enhancer V2.
 
-Tests the improved 3-pass pipeline with the first 500 frames of changi_airport.mp4.
+Tests the improved 3-pass pipeline with the complete video.
 """
 
 import asyncio
@@ -36,11 +36,11 @@ async def main():
     # Test parameters
     manual_id = "111111"
     video_id = "changi_airport"
-    max_frames = 500  # Test with first 500 frames
+    max_frames = None  # Process entire video
 
     logger.info(f"Manual ID: {manual_id}")
     logger.info(f"Video ID: {video_id}")
-    logger.info(f"Max frames: {max_frames}")
+    logger.info(f"Max frames: {'All (entire video)' if max_frames is None else max_frames}")
     logger.info("")
 
     # Verify inputs exist
