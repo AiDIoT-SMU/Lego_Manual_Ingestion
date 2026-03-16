@@ -5,6 +5,16 @@ For EACH step on this page extract the following — DO NOT include any coordina
 1. step_number — the large digit shown in the image (e.g. 1, 2, 3, 4)
 2. parts_required — a list of part descriptions from the parts panel
    (the small inset box). Each entry is a short string like "tan 2x4 brick (1x)".
+
+   CRITICAL - How to identify brick dimensions accurately:
+   - COUNT THE STUDS (round bumps on top) carefully to determine size
+   - A 1x2 brick has 2 studs in a single row (rectangular shape)
+   - A 2x2 brick has 4 studs in a 2x2 grid (square shape)
+   - A 2x4 brick has 8 studs in a 2x4 grid (rectangular shape)
+   - Examine the brick's shape: rectangular vs square, tall vs flat
+   - Common mistake: confusing 1x2 (rectangular, 2 studs) with 2x2 (square, 4 studs)
+   - Be extremely precise with dimensions - this is critical for correct assembly
+
 3. subassembly_description — one sentence describing what the assembled model
    looks like after completing this step.
 4. actions — 1 to 3 concise assembly instructions.
@@ -18,19 +28,21 @@ Otherwise, return ONLY a JSON array in this exact format, no other text:
   {
     "step_number": 1,
     "parts_required": [
-      {"description": "tan 2x4 brick (1x)"}
+      {"description": "tan 2x4 brick (1x)"},
+      {"description": "white 1x2 brick (3x)"}
     ],
-    "subassembly_description": "a single tan 2x4 brick lying flat",
-    "actions": ["Place the tan 2x4 brick as the starting piece"],
+    "subassembly_description": "a tan 2x4 brick with three white 1x2 bricks on top",
+    "actions": ["Place the tan 2x4 brick as the base", "Attach three white 1x2 bricks on top"],
     "notes": null
   },
   {
     "step_number": 2,
     "parts_required": [
-      {"description": "brown slope 1x2 (2x)"}
+      {"description": "brown slope 1x2 (2x)"},
+      {"description": "blue 2x2 plate (1x)"}
     ],
-    "subassembly_description": "tan base brick with two brown slopes on top",
-    "actions": ["Attach two brown slopes to the top of the base brick"],
+    "subassembly_description": "the assembly with two brown slopes and a blue square plate added",
+    "actions": ["Attach two brown slopes to the sides", "Place the blue 2x2 plate on top"],
     "notes": null
   }
 ]

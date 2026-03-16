@@ -24,6 +24,7 @@ logs/
 data/cropped/
 data/manuals/
 data/processed/
+data/visualisation/*.jpg
 
 # Generated brick library (meshes and point clouds - can be rebuilt)
 data/brick_library/

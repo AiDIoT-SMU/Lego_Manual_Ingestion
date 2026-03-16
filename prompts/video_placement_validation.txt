@@ -1,0 +1,148 @@
+You are analyzing consecutive placement frames from a LEGO assembly video to identify what new part was added.
+
+You have access to the EXPECTED PARTS LIST from the instruction manual to help with accurate part identification.
+
+**CRITICAL INSTRUCTIONS:**
+
+⚠️ **DO NOT HALLUCINATE** - Only report a new part if you can CLEARLY SEE it in the current frame
+⚠️ **BE CONSERVATIVE** - If unsure, set has_new_part: false rather than guessing
+⚠️ **IGNORE CAMERA MOVEMENT** - If the assembly looks the same but from a different angle, that's NOT a new part
+⚠️ **IDENTICAL FRAMES = NO NEW PART** - If the previous and current frames show the EXACT SAME assembly state (even if minor lighting/angle differences), you MUST set has_new_part: false
+⚠️ **FOLLOW STEP SEQUENCE** - Only match parts from the current manual step (provided below)
+⚠️ **NO GUESSING** - Do not infer or predict parts based on the expected parts list. Only report what you ACTUALLY SEE in the current frame.
+
+**YOUR TASK:**
+
+Compare the PREVIOUS PLACEMENT FRAME with the CURRENT PLACEMENT FRAME and determine:
+1. Was a new LEGO part **CLEARLY VISIBLE AND ACTUALLY ADDED**? (not just camera angle change)
+2. If yes, what specific part was added and WHERE IS IT in the current frame?
+3. Where was it placed?
+4. Does the part match the expected parts from the CURRENT manual step?
+
+**EXPECTED PARTS FROM MANUAL:**
+{expected_parts_list}
+
+**REFERENCE IMAGES PROVIDED:**
+- You will be shown cropped images of the expected parts from the instruction manual
+- You will be shown the expected subassembly image showing what the completed step should look like
+- Use these reference images to accurately identify parts and track assembly progress
+- Compare the current placement frame with the expected subassembly to determine if the step is complete
+
+**ANALYSIS GUIDELINES:**
+
+**Part Identification:**
+- Describe the part with: COLOR + TYPE + SIZE (e.g., "red 2x4 brick", "white round 2x2 brick")
+- **STRONGLY PREFER parts from the expected_parts_list** - trust the manual unless you are VERY confident it's wrong
+- Cross-reference with the expected parts list above
+- If the part matches expected parts, set matched_from_manual: true
+- If the part doesn't match expected parts, still describe it accurately but set matched_from_manual: false
+
+**CRITICAL - How to accurately determine brick dimensions:**
+- COUNT THE STUDS (round bumps on top) carefully to determine size
+- A 1x2 brick has 2 studs in a single row (rectangular, longer shape)
+- A 2x2 brick has 4 studs in a 2x2 grid (square shape)
+- A 2x4 brick has 8 studs in a 2x4 grid (rectangular, larger)
+- Examine the brick's shape: rectangular vs square, tall vs flat
+- Common mistake: confusing 1x2 (rectangular, 2 studs) with 2x2 (square, 4 studs)
+- When in doubt, CHECK the expected_parts_list first before making assumptions
+
+**Spatial Positioning:**
+- **location**: Where on the assembly (e.g., "left side", "center", "top", "front edge")
+- **reference_object**: What is it attached to? (e.g., "baseplate", "previous white brick", "center tower")
+- **orientation**: How is it oriented? (e.g., "horizontal", "vertical", "upright")
+- **relative_position**: If applicable, describe position relative to other parts (e.g., "to the right of the red brick")
+
+**Duplicate Detection:**
+- If the two frames show EXACTLY the same assembly configuration → set has_new_part: false
+- Look carefully at every visible part - even small changes count
+- Background objects that aren't part of the active assembly should be ignored
+
+**Subassembly Handling:**
+- If the user is working on a separate subassembly (different from the main build), note it
+- Set is_subassembly_switch: true if the user switched to a different assembly area
+- Ignore parts in the background that aren't being actively assembled
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON:
+
+```json
+{
+  "has_new_part": true,
+  "new_parts_added": [
+    {
+      "part_description": "white 2x2 brick",
+      "matched_from_manual": true,
+      "manual_step_hint": 1,
+      "color": "white",
+      "type": "brick",
+      "size": "2x2",
+      "quantity": 1
+    }
+  ],
+  "action_description": "Add white 2x2 brick to the left side of the baseplate",
+  "spatial_position": {
+    "location": "left side",
+    "reference_object": "grey baseplate",
+    "orientation": "upright",
+    "relative_position": "adjacent to the previous white brick"
+  },
+  "is_duplicate_of_previous": false,
+  "is_subassembly_switch": false,
+  "confidence": 0.95,
+  "reasoning": "Clear view of new white 2x2 brick added to left side, matches expected parts from step 1"
+}
+```
+
+**SPECIAL CASES:**
+
+If NO new part was added (duplicate frame):
+```json
+{
+  "has_new_part": false,
+  "new_parts_added": [],
+  "action_description": null,
+  "spatial_position": null,
+  "is_duplicate_of_previous": true,
+  "is_subassembly_switch": false,
+  "confidence": 1.0,
+  "reasoning": "Assembly state is identical to previous frame"
+}
+```
+
+If this is the FIRST placement frame (no previous frame to compare):
+```json
+{
+  "has_new_part": true,
+  "new_parts_added": [
+    {
+      "part_description": "grey baseplate",
+      "matched_from_manual": true,
+      "manual_step_hint": 1,
+      "color": "grey",
+      "type": "baseplate",
+      "size": "large",
+      "quantity": 1
+    }
+  ],
+  "action_description": "Place grey baseplate as the foundation",
+  "spatial_position": {
+    "location": "base",
+    "reference_object": "building surface",
+    "orientation": "flat",
+    "relative_position": "foundation layer"
+  },
+  "is_duplicate_of_previous": false,
+  "is_subassembly_switch": false,
+  "confidence": 0.9,
+  "reasoning": "First placement showing baseplate foundation"
+}
+```
+
+**IMPORTANT:**
+- **ALWAYS check expected_parts_list FIRST** - only deviate if you're absolutely certain the manual is wrong
+- When a part visually resembles multiple options from the list, choose the one from expected_parts_list
+- Count studs carefully to differentiate 1x2 vs 2x2 vs 2x4 - this is CRITICAL for accuracy
+- Be precise with colors (white vs light grey vs grey)
+- If multiple parts were added, include all in new_parts_added array
+- Do NOT include any text before or after the JSON

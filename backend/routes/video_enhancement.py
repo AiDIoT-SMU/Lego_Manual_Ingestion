@@ -9,7 +9,7 @@ from typing import Dict, List, Any
 from loguru import logger
 
 from backend.services.data_service import DataService
-from backend.services.video_enhancer import VideoEnhancer
+from backend.services.video_enhancer_v2 import VideoEnhancerV2
 from ingestion.vlm_extractor import VLMExtractor
 from config.settings import Settings
 
@@ -22,21 +22,21 @@ def get_data_service() -> DataService:
     return DataService()
 
 
-def get_video_enhancer() -> VideoEnhancer:
-    """Dependency for video enhancer."""
+def get_video_enhancer() -> VideoEnhancerV2:
+    """Dependency for video enhancer V2."""
     settings = Settings()
     vlm_extractor = VLMExtractor(
         vlm_model=settings.vlm_model,
         api_key=settings.gemini_api_key
     )
     data_service = DataService()
-    return VideoEnhancer(vlm_extractor, data_service, settings)
+    return VideoEnhancerV2(vlm_extractor, data_service, settings)
 
 
 async def process_video_enhancement(
     manual_id: str,
     video_id: str,
-    enhancer: VideoEnhancer,
+    enhancer: VideoEnhancerV2,
     data_service: DataService
 ):
     """
@@ -45,7 +45,7 @@ async def process_video_enhancement(
     Args:
         manual_id: Manual identifier
         video_id: Video identifier
-        enhancer: VideoEnhancer instance
+        enhancer: VideoEnhancerV2 instance
         data_service: DataService instance
     """
     try:
@@ -71,7 +71,7 @@ async def upload_and_enhance_video(
     manual_id: str = Form(...),
     video_file: UploadFile = File(...),
     data_service: DataService = Depends(get_data_service),
-    enhancer: VideoEnhancer = Depends(get_video_enhancer)
+    enhancer: VideoEnhancerV2 = Depends(get_video_enhancer)
 ) -> Dict[str, Any]:
     """
     Upload video and directly start enhancement (bypasses video_analyzer).
@@ -162,7 +162,7 @@ async def enhance_manual_with_video(
     manual_id: str,
     video_id: str,
     data_service: DataService = Depends(get_data_service),
-    enhancer: VideoEnhancer = Depends(get_video_enhancer)
+    enhancer: VideoEnhancerV2 = Depends(get_video_enhancer)
 ) -> Dict[str, Any]:
     """
     Trigger video enhancement process for already-uploaded video.

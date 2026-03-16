@@ -13,9 +13,10 @@ class Settings(BaseSettings):
 
     # VLM Configuration (single model, no fallbacks)
     gemini_api_key: str
-    vlm_model: str = "gemini/gemini-robotics-er-1.5-preview"
+    vlm_model: str = "gemini/gemini-3.1-flash-lite-preview"
     vlm_max_retries: int = 3
     vlm_timeout: int = 60  # seconds
+    frame_classification_batch_size: int = 8  # frames per VLM call in video enhancement
 
     # Paths (relative to project root)
     data_dir: Path = Path("./data")
