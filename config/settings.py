@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     vlm_max_retries: int = 3
     vlm_timeout: int = 60  # seconds
     frame_classification_batch_size: int = 8  # frames per VLM call in video enhancement
+    placement_min_confidence: float = 0.6  # minimum VLM confidence to accept a detected placement
 
     # Paths (relative to project root)
     data_dir: Path = Path("./data")

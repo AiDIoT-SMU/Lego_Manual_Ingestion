@@ -1,10 +1,11 @@
 """
-Video Enhancer V2: Improved 3-pass pipeline with quality filtering and context awareness.
+Video Enhancer V2: Improved 4-pass pipeline with quality filtering and context awareness.
 
-Three VLM call pipeline:
+Four VLM call pipeline:
 1. Frame Classification: Batch classify frames with quality metrics (action vs placement_candidate).
 2. Placement Validation: Context-aware analysis using enhanced.json parts list + duplicate detection.
-3. Atomic Sub-steps: Generate 1-part-per-sub-step instructions with spatial positioning.
+3. Per-Placement Reconciliation: Individual VLM calls for each placement to verify against expected parts using annotated frames + reference images.
+4. Atomic Sub-steps: Generate 1-part-per-sub-step instructions with spatial positioning from reconciled placements.
 """
 
 import io
@@ -16,7 +17,7 @@ from datetime import datetime
 from loguru import logger
 from PIL import Image as PILImage
 
-from ingestion.vlm_extractor import VLMExtractor, _parse_json
+from ingestion.vlm_extractor import VLMExtractor, _parse_json, _box2d_to_bbox
 from backend.services.data_service import DataService
 from backend.services.video_quality_filter import VideoQualityFilter
 from backend.services.video_state_tracker import AssemblyStateTracker, SubassemblyTracker
@@ -52,6 +53,72 @@ def _parse_quantity_from_description(description: str) -> int:
     if match:
         return int(match.group(1))
     return 1
+
+
+def _draw_placement_bbox(
+    frame_path: Any,
+    box_2d: Optional[List],
+    frame_num: int,
+    label: str,
+    confidence: float,
+    output_dir: Path
+) -> Optional[Path]:
+    """
+    Draw a bounding box on the placement frame and save the annotated image.
+
+    Uses the same [ymin, xmin, ymax, xmax] 0-1000 convention as vlm_extractor,
+    converted via the shared _box2d_to_bbox helper.
+
+    Args:
+        frame_path: Path to the source frame (str or Path)
+        box_2d: [ymin, xmin, ymax, xmax] each 0-1000, or None
+        frame_num: Frame number used for the output filename
+        label: Action description to overlay on the box
+        confidence: VLM confidence score
+        output_dir: Directory to save the annotated image
+
+    Returns:
+        Path to the saved annotated image, or None on failure
+    """
+    from PIL import ImageDraw
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        img = PILImage.open(str(frame_path)).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        img_w, img_h = img.size
+
+        drawn_box = False
+        if box_2d and isinstance(box_2d, list) and len(box_2d) == 4:
+            bbox = _box2d_to_bbox(box_2d, img_w, img_h)
+            x0, y0 = bbox.x, bbox.y
+            x1, y1 = bbox.x + bbox.width, bbox.y + bbox.height
+
+            if x1 > x0 and y1 > y0:
+                box_color = (0, 220, 0) if confidence >= 0.8 else (255, 165, 0) if confidence >= 0.6 else (255, 50, 50)
+                draw.rectangle([x0, y0, x1, y1], outline=box_color, width=3)
+
+                short_label = label[:50] + ("…" if len(label) > 50 else "")
+                caption = f"{short_label} ({confidence:.2f})"
+                text_y = max(0, y0 - 18)
+                draw.rectangle([x0, text_y, x0 + len(caption) * 7, text_y + 16], fill=box_color)
+                draw.text((x0 + 2, text_y + 1), caption, fill=(0, 0, 0))
+                drawn_box = True
+            else:
+                logger.debug(f"Frame {frame_num}: box_2d degenerated to zero size after conversion (raw: {box_2d})")
+
+        if not drawn_box:
+            caption = f"frame {frame_num} | no bbox | conf={confidence:.2f}"
+            draw.rectangle([0, 0, img_w, 20], fill=(180, 100, 0))
+            draw.text((4, 2), caption, fill=(255, 255, 255))
+
+        out_path = output_dir / f"frame_{frame_num:04d}.jpg"
+        img.save(str(out_path), format="JPEG", quality=90)
+        return out_path
+
+    except Exception as e:
+        logger.warning(f"Could not draw bbox for frame {frame_num}: {e}")
+        return None
 
 
 class VideoEnhancerV2:
@@ -91,6 +158,13 @@ class VideoEnhancerV2:
             else self._get_default_atomic_substeps_prompt()
         )
 
+        placement_reconciliation_path = prompts_dir / "video_placement_reconciliation.txt"
+        self.placement_reconciliation_template = (
+            placement_reconciliation_path.read_text()
+            if placement_reconciliation_path.exists()
+            else self._get_default_placement_reconciliation_prompt()
+        )
+
         # Initialize quality filter and state trackers
         self.quality_filter = VideoQualityFilter(
             blur_threshold=100.0,
@@ -109,13 +183,14 @@ class VideoEnhancerV2:
         max_frames: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Run the full 3-pass pipeline and return the video_enhanced.json structure.
+        Run the full 4-pass pipeline and return the video_enhanced.json structure.
 
         Pipeline:
         1. Extract frames from video (denser sampling: every 5 frames).
         2. VLM Pass 1: Classify frames with quality metrics → placement candidates.
         3. VLM Pass 2: Validate placements with context from enhanced.json + detect duplicates.
-        4. VLM Pass 3: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
+        4. VLM Pass 3: Per-placement reconciliation using annotated frames + reference images.
+        5. VLM Pass 4: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
 
         Args:
             manual_id: Manual identifier
@@ -124,7 +199,7 @@ class VideoEnhancerV2:
         """
         logger.info(f"Starting video enhancement V2 for manual {manual_id}, video {video_id}")
 
-        # Load manual data (needed for Pass 2 context)
+        # Load manual data (needed for Pass 2+ context)
         manual_data = self.data_service.get_steps(manual_id)
         logger.info(f"Loaded manual data: {len(manual_data['steps'])} steps")
 
@@ -154,10 +229,22 @@ class VideoEnhancerV2:
             manual_id, video_id, validated_placements, len(placement_candidates)
         )
 
-        # === VLM PASS 3: Atomic Sub-step Generation ===
-        logger.info("VLM Pass 3: Generating atomic sub-steps...")
+        # === VLM PASS 3: Per-Placement Reconciliation ===
+        logger.info("VLM Pass 3: Reconciling each placement against expected parts...")
+        reconciled_placements = await self._reconcile_placements_individually(
+            manual_id, video_id, validated_placements_data, manual_data
+        )
+        logger.info(f"Pass 3 complete: {len(reconciled_placements.get('placements', []))} placements reconciled")
+
+        # Write reconciled placements cache
+        reconciled_data = self._write_reconciled_placements_cache(
+            manual_id, video_id, reconciled_placements
+        )
+
+        # === VLM PASS 4: Atomic Sub-step Generation ===
+        logger.info("VLM Pass 4: Generating atomic sub-steps from reconciled placements...")
         enhanced_manual = await self._generate_atomic_substeps(
-            manual_id, video_id, validated_placements_data, manual_data, frames
+            manual_id, video_id, reconciled_data, manual_data, frames
         )
 
         logger.info(f"Video enhancement V2 complete: {len(enhanced_manual['steps'])} steps enhanced")
@@ -498,14 +585,14 @@ class VideoEnhancerV2:
         placement_candidates: List[Dict[str, Any]],
         manual_data: Dict[str, Any],
         manual_id: str,
-        video_id: str
+        video_id: str,
     ) -> List[Dict[str, Any]]:
         """
         VLM Pass 2: Validate placement candidates using context from enhanced.json.
 
-        For each consecutive pair:
-        - Load expected parts list from CURRENT step (follows manual sequence)
-        - Detect what new part was added
+        For each candidate frame:
+        - Compare against the LAST ACCEPTED placement (not just the preceding candidate)
+        - Detect what new part was added using pure visual comparison
         - Check for duplicates using perceptual hashing
         - Track subassembly switches
         """
@@ -541,6 +628,8 @@ class VideoEnhancerV2:
 
         validated_placements: List[Dict[str, Any]] = []
         new_calls = 0
+        # Tracks the last placement_candidate dict that was accepted into validated_placements
+        last_accepted_candidate: Optional[Dict[str, Any]] = None
 
         for i, current_frame in enumerate(placement_candidates):
             frame_num = current_frame["frame_number"]
@@ -559,6 +648,7 @@ class VideoEnhancerV2:
                         cached["frame_path"] = str(frame_path_obj)
 
                 validated_placements.append(cached)
+                last_accepted_candidate = current_frame
                 # Register with state tracker
                 self.state_tracker.register_placement(
                     current_frame["frame_path"], frame_num, cached
@@ -586,120 +676,31 @@ class VideoEnhancerV2:
                 current_img = _resize_image(str(current_frame["frame_path"]), width=800)
                 current_b64 = _image_to_b64(current_img)
 
-                # Get expected parts for current step + next step (lookahead)
-                expected_parts = self._get_expected_parts_for_steps(
-                    parts_by_step, current_step, lookahead_steps=1
-                )
+                prompt_with_context = self.placement_validation_template
 
-                # Load cropped part images for visual reference
-                part_images = []
-                for part in expected_parts:
-                    img_path = part.get("cropped_image_path")
-                    if img_path:
-                        full_path = self.settings.data_dir / img_path
-                        if full_path.exists():
-                            try:
-                                part_img = _resize_image(str(full_path), width=400)
-                                part_b64 = _image_to_b64(part_img)
-                                part_images.append({
-                                    "description": part.get("description"),
-                                    "step": part.get("step"),
-                                    "quantity": part.get("quantity"),
-                                    "image": part_b64
-                                })
-                            except Exception as e:
-                                logger.warning(f"Failed to load part image {img_path}: {e}")
-
-                # Load subassembly reference image for current step
-                subassembly_images = []
-                step_data = parts_by_step.get(current_step, {})
-                for subassembly in step_data.get("subassemblies", []):
-                    img_path = subassembly.get("cropped_image_path")
-                    if img_path:
-                        full_path = self.settings.data_dir / img_path
-                        if full_path.exists():
-                            try:
-                                sub_img = _resize_image(str(full_path), width=600)
-                                sub_b64 = _image_to_b64(sub_img)
-                                subassembly_images.append({
-                                    "description": subassembly.get("description"),
-                                    "image": sub_b64
-                                })
-                            except Exception as e:
-                                logger.warning(f"Failed to load subassembly image {img_path}: {e}")
-
-                # Build prompt with step-aware context
-                step_context = f"Current Manual Step: {current_step}\n"
-                prompt_with_context = self.placement_validation_template.replace(
-                    "{expected_parts_list}",
-                    step_context + json.dumps(expected_parts, indent=2)
-                )
-
-                # Build content with cropped reference images
+                # Build content with previous and current frames only
                 if i == 0:
                     # First placement - no previous frame
                     content = [
-                        {"type": "text", "text": "REFERENCE: Expected Parts (from instruction manual):"},
-                    ]
-                    for idx, part_img_data in enumerate(part_images):
-                        content.append({
-                            "type": "text",
-                            "text": f"Part {idx+1}: {part_img_data['description']} (Step {part_img_data['step']}, Qty: {part_img_data['quantity']})"
-                        })
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{part_img_data['image']}"}
-                        })
-
-                    if subassembly_images:
-                        content.append({"type": "text", "text": f"REFERENCE: Expected Subassembly (Step {current_step}):"})
-                        for sub_img_data in subassembly_images:
-                            content.append({"type": "text", "text": f"{sub_img_data['description']}"})
-                            content.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{sub_img_data['image']}"}
-                            })
-
-                    content.extend([
                         {"type": "text", "text": "CURRENT PLACEMENT FRAME (first placement — no previous frame):"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
                         {"type": "text", "text": prompt_with_context}
-                    ])
+                    ]
                 else:
-                    # Compare with previous placement
-                    prev_frame = placement_candidates[i - 1]
+                    # Use the last ACCEPTED placement as the reference frame so that
+                    # we always compare against a known-good state, not a skipped candidate.
+                    prev_frame = last_accepted_candidate if last_accepted_candidate is not None else placement_candidates[i - 1]
                     prev_img = _resize_image(str(prev_frame["frame_path"]), width=800)
                     prev_b64 = _image_to_b64(prev_img)
+                    prev_frame_num = prev_frame.get("frame_number", "?")
 
                     content = [
-                        {"type": "text", "text": "REFERENCE: Expected Parts (from instruction manual):"},
-                    ]
-                    for idx, part_img_data in enumerate(part_images):
-                        content.append({
-                            "type": "text",
-                            "text": f"Part {idx+1}: {part_img_data['description']} (Step {part_img_data['step']}, Qty: {part_img_data['quantity']})"
-                        })
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{part_img_data['image']}"}
-                        })
-
-                    if subassembly_images:
-                        content.append({"type": "text", "text": f"REFERENCE: Expected Subassembly (Step {current_step}):"})
-                        for sub_img_data in subassembly_images:
-                            content.append({"type": "text", "text": f"{sub_img_data['description']}"})
-                            content.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{sub_img_data['image']}"}
-                            })
-
-                    content.extend([
-                        {"type": "text", "text": "PREVIOUS PLACEMENT FRAME:"},
+                        {"type": "text", "text": f"PREVIOUS PLACEMENT FRAME (frame {prev_frame_num} — last accepted placement):"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{prev_b64}"}},
-                        {"type": "text", "text": "CURRENT PLACEMENT FRAME:"},
+                        {"type": "text", "text": f"CURRENT PLACEMENT FRAME (frame {frame_num}):"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
                         {"type": "text", "text": prompt_with_context}
-                    ])
+                    ]
 
                 messages = [{"role": "user", "content": content}]
 
@@ -708,11 +709,22 @@ class VideoEnhancerV2:
 
                 has_new_part = result.get("has_new_part", False)
                 is_duplicate = result.get("is_duplicate_of_previous", False)
+                confidence = result.get("confidence", 0.0)
 
                 if is_duplicate or not has_new_part:
                     logger.info(
                         f"  Placement {i} (frame {frame_num}): "
                         f"Duplicate or no new part detected, skipping"
+                    )
+                    continue
+
+                # Confidence gate: reject low-confidence claims to reduce hallucinations.
+                # Threshold is configurable via settings (default 0.6).
+                min_confidence = getattr(self.settings, "placement_min_confidence", 0.6)
+                if confidence < min_confidence:
+                    logger.info(
+                        f"  Placement {i} (frame {frame_num}): "
+                        f"Low confidence ({confidence:.2f} < {min_confidence}), skipping"
                     )
                     continue
 
@@ -732,6 +744,17 @@ class VideoEnhancerV2:
                         # If not relative to data_dir, use absolute path
                         relative_frame_path = str(frame_path_obj)
 
+                    # Draw annotated frame with bounding box if the VLM returned one
+                    box_2d = result.get("box_2d")
+                    annotated_frame_path = _draw_placement_bbox(
+                        frame_path=current_frame["frame_path"],
+                        box_2d=box_2d,
+                        frame_num=frame_num,
+                        label=action_desc,
+                        confidence=confidence,
+                        output_dir=self.settings.data_dir / "processed" / manual_id / f"validated_placement_annotated_{video_id}"
+                    )
+
                     action_data: Dict[str, Any] = {
                         "placement_index": i,
                         "frame_number": frame_num,
@@ -740,12 +763,15 @@ class VideoEnhancerV2:
                         "action_description": action_desc,
                         "new_parts": result.get("new_parts_added", []),
                         "spatial_position": result.get("spatial_position", {}),
+                        "box_2d": box_2d,
+                        "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
                         "is_subassembly_switch": is_subassembly_switch,
                         "current_subassembly": self.subassembly_tracker.get_current_subassembly(),
                         "manual_step": current_step,
-                        "confidence": result.get("confidence", 0.0)
+                        "confidence": confidence
                     }
                     validated_placements.append(action_data)
+                    last_accepted_candidate = current_frame
 
                     # Register with state tracker
                     self.state_tracker.register_placement(
@@ -887,28 +913,242 @@ class VideoEnhancerV2:
 
         return validated_data
 
-    # ── VLM Pass 3: Atomic Sub-step Generation ───────────────────────────────
+    def _write_reconciled_placements_cache(
+        self,
+        manual_id: str,
+        video_id: str,
+        reconciled_placements: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Write reconciled placements to cache."""
+        output_path = (
+            self.settings.data_dir / "processed" / manual_id
+            / f"video_reconciled_placements_{video_id}.json"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(reconciled_placements, f, indent=2)
+
+        logger.info(f"Reconciled placements written to: {output_path}")
+        return reconciled_placements
+
+    # ── VLM Pass 3: Per-Placement Reconciliation ─────────────────────────────
+
+    async def _reconcile_single_placement(
+        self,
+        placement: Dict[str, Any],
+        expected_parts: List[Dict[str, Any]],
+        step_number: int,
+        manual_id: str
+    ) -> Dict[str, Any]:
+        """
+        Reconcile a single placement against expected parts using VLM analysis.
+
+        Args:
+            placement: Single validated placement with annotated_frame_path
+            expected_parts: List of expected parts for the current step
+            step_number: Current manual step number
+            manual_id: Manual identifier for loading images
+
+        Returns:
+            Reconciliation result with verified part information
+        """
+        # Build content for VLM call
+        content: List[Dict[str, Any]] = []
+
+        # 1. Add annotated frame (with bounding box)
+        annotated_frame_path = placement.get("annotated_frame_path")
+        if annotated_frame_path:
+            full_annotated_path = self.settings.data_dir / annotated_frame_path
+            if full_annotated_path.exists():
+                try:
+                    annotated_img = _resize_image(str(full_annotated_path), width=800)
+                    annotated_b64 = _image_to_b64(annotated_img)
+                    content.append({
+                        "type": "text",
+                        "text": f"ANNOTATED FRAME (Placement {placement['placement_index']}, Frame {placement['frame_number']}):"
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{annotated_b64}"}
+                    })
+                except Exception as e:
+                    logger.warning(f"Could not load annotated frame {annotated_frame_path}: {e}")
+            else:
+                logger.warning(f"Annotated frame not found: {full_annotated_path}")
+
+        # 2. Add expected parts reference images
+        if expected_parts:
+            content.append({
+                "type": "text",
+                "text": f"EXPECTED PARTS FOR STEP {step_number} (reference images):"
+            })
+            for idx, part in enumerate(expected_parts):
+                part_img_path = part.get("cropped_image_path")
+                if part_img_path:
+                    full_part_path = self.settings.data_dir / part_img_path
+                    if full_part_path.exists():
+                        try:
+                            part_img = _resize_image(str(full_part_path), width=400)
+                            part_b64 = _image_to_b64(part_img)
+                            content.append({
+                                "type": "text",
+                                "text": f"Expected Part {idx + 1}: {part['description']}"
+                            })
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{part_b64}"}
+                            })
+                        except Exception as e:
+                            logger.warning(f"Could not load part image {part_img_path}: {e}")
+
+        # 3. Build placement metadata JSON
+        placement_metadata = {
+            "placement_index": placement["placement_index"],
+            "frame_number": placement["frame_number"],
+            "timestamp": placement["timestamp"],
+            "video_detected_parts": placement.get("new_parts", []),
+            "action_description": placement.get("action_description", ""),
+            "spatial_position": placement.get("spatial_position", {}),
+            "confidence": placement.get("confidence", 0.0)
+        }
+
+        # 4. Build expected parts JSON (without images)
+        expected_parts_json = [
+            {
+                "description": part["description"],
+                "quantity": part.get("quantity", 1)
+            }
+            for part in expected_parts
+        ]
+
+        # 5. Build prompt from template
+        prompt = self.placement_reconciliation_template.replace(
+            "{placement_metadata}", json.dumps(placement_metadata, indent=2)
+        ).replace(
+            "{expected_parts}", json.dumps(expected_parts_json, indent=2)
+        ).replace(
+            "{step_number}", str(step_number)
+        )
+
+        content.append({"type": "text", "text": prompt})
+
+        # Make VLM call
+        messages = [{"role": "user", "content": content}]
+        raw = self.vlm._litellm_with_retry(messages)
+        result = _parse_json(raw)
+
+        return result
+
+    async def _reconcile_placements_individually(
+        self,
+        manual_id: str,
+        video_id: str,
+        validated_placements: Dict[str, Any],
+        manual_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        VLM Pass 3: Reconcile each placement individually against expected parts.
+
+        Uses annotated frames + reference images to verify/correct part identifications.
+        Returns reconciled placements with verified part information.
+        """
+        logger.info("VLM Pass 3: Starting per-placement reconciliation...")
+
+        # Build parts lookup by step
+        parts_by_step = self._build_parts_by_step(manual_data)
+
+        # Process all placements
+        placements = validated_placements.get("placements", [])
+        reconciled_placements = []
+        total_reconciled = 0
+
+        for placement in placements:
+            step_num = placement.get("manual_step", 1)
+            expected_parts_data = parts_by_step.get(step_num, {}).get("parts", [])
+
+            try:
+                # Perform per-placement reconciliation
+                reconciliation = await self._reconcile_single_placement(
+                    placement=placement,
+                    expected_parts=expected_parts_data,
+                    step_number=step_num,
+                    manual_id=manual_id
+                )
+
+                # Enrich placement with reconciliation data
+                enriched_placement = {
+                    **placement,
+                    "reconciliation": {
+                        "verified": reconciliation.get("verified", False),
+                        "matched_part": reconciliation.get("matched_part"),
+                        "video_detection_correct": reconciliation.get("video_detection_correct", True),
+                        "correction": reconciliation.get("correction"),
+                        "reasoning": reconciliation.get("reasoning", "")
+                    }
+                }
+
+                reconciled_placements.append(enriched_placement)
+                total_reconciled += 1
+
+                verified = reconciliation.get("verified", False)
+                video_correct = reconciliation.get("video_detection_correct", True)
+                matched_part = reconciliation.get("matched_part")
+                part_desc = matched_part.get("description", "unknown") if matched_part else "none"
+
+                logger.info(
+                    f"  Placement {placement['placement_index']} (frame {placement['frame_number']}, step {step_num}): "
+                    f"{'✓ verified' if verified else '✗ unverified'} | "
+                    f"{'✓ correct' if video_correct else '✗ corrected'} | "
+                    f"{part_desc}"
+                )
+
+            except Exception as e:
+                logger.error(f"Failed to reconcile placement {placement['placement_index']}: {e}")
+                # Fallback: keep original placement without reconciliation
+                reconciled_placements.append({
+                    **placement,
+                    "reconciliation": {
+                        "verified": False,
+                        "matched_part": None,
+                        "video_detection_correct": False,
+                        "correction": None,
+                        "reasoning": f"Reconciliation failed: {str(e)}"
+                    }
+                })
+
+        logger.info(f"VLM Pass 3 complete: {total_reconciled} placements reconciled individually")
+
+        return {
+            "manual_id": manual_id,
+            "video_id": video_id,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "total_placements": len(reconciled_placements),
+            "placements": reconciled_placements
+        }
+
+    # ── VLM Pass 4: Atomic Sub-step Generation ───────────────────────────────
 
     async def _generate_atomic_substeps(
         self,
         manual_id: str,
         video_id: str,
-        validated_placements: Dict[str, Any],
+        reconciled_placements: Dict[str, Any],
         manual_data: Dict[str, Any],
         all_frames: List[Path]
     ) -> Dict[str, Any]:
         """
-        VLM Pass 3: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
+        VLM Pass 4: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
 
-        Sends enhanced.json + validated_placements.json as text, plus sample frames.
+        Uses reconciled placements to create the final video_enhanced.json structure.
+        Sends enhanced.json + reconciled_placements.json as text, plus sample frames.
         """
         enhanced_json_str = json.dumps(manual_data, indent=2)
-        placements_json_str = json.dumps(validated_placements, indent=2)
+        reconciled_json_str = json.dumps(reconciled_placements, indent=2)
 
         prompt = self.atomic_substeps_template.replace(
             "{enhanced_json}", enhanced_json_str
         ).replace(
-            "{validated_placements_json}", placements_json_str
+            "{validated_placements_json}", reconciled_json_str
         )
 
         # Build a frame_number → Path lookup for sample images
@@ -917,7 +1157,7 @@ class VideoEnhancerV2:
         }
 
         # Pick up to 5 evenly-spaced placements as visual context
-        placements = validated_placements.get("placements", [])
+        placements = reconciled_placements.get("placements", [])
         step = max(1, len(placements) // 5)
         sample_placements = placements[::step][:5]
 
@@ -930,12 +1170,19 @@ class VideoEnhancerV2:
                     try:
                         img = _resize_image(str(frame_path), width=600)
                         b64 = _image_to_b64(img)
+
+                        # Include reconciliation info if available
+                        reconciliation = p.get("reconciliation", {})
+                        matched_part = reconciliation.get("matched_part", {})
+                        part_info = matched_part.get("description", "unknown") if matched_part else "unknown"
+
                         content.append({
                             "type": "text",
                             "text": (
                                 f"Placement {p['placement_index']} "
-                                f"(frame {p['frame_number']}): "
-                                f"{p.get('action_description', '')}"
+                                f"(frame {p['frame_number']}, step {p.get('manual_step', '?')}): "
+                                f"{p.get('action_description', '')} "
+                                f"[Reconciled: {part_info}]"
                             )
                         })
                         content.append({
@@ -959,7 +1206,7 @@ class VideoEnhancerV2:
                 placements_by_step_and_order[step_num] = []
             placements_by_step_and_order[step_num].append(placement)
 
-        # Merge with original manual data and enrich sub-steps with frame paths
+        # Merge with original manual data and enrich sub-steps with frame paths + reconciliation
         reconciled_by_num = {
             s["step_number"]: s for s in result.get("steps", [])
         }
@@ -975,17 +1222,20 @@ class VideoEnhancerV2:
             # Get placements for this step
             step_placements = placements_by_step_and_order.get(step_num, [])
 
-            # Enrich each sub-step with frame path
+            # Enrich each sub-step with frame path and reconciliation data
             enriched_sub_steps = []
             for idx, sub_step in enumerate(sub_steps):
                 # Match sub-step to placement by order (assuming VLM maintains sequence)
                 if idx < len(step_placements):
                     placement = step_placements[idx]
+                    reconciliation = placement.get("reconciliation", {})
+
                     enriched_sub_steps.append({
                         **sub_step,
                         "frame_path": placement.get("frame_path"),
                         "frame_number": placement.get("frame_number"),
-                        "timestamp": placement.get("timestamp")
+                        "timestamp": placement.get("timestamp"),
+                        "reconciliation": reconciliation
                     })
                 else:
                     # No matching placement found
@@ -1021,3 +1271,6 @@ class VideoEnhancerV2:
 
     def _get_default_atomic_substeps_prompt(self) -> str:
         return "Generate atomic sub-steps. Return JSON."
+
+    def _get_default_placement_reconciliation_prompt(self) -> str:
+        return "Reconcile placement against expected parts. Return JSON with verified, matched_part, video_detection_correct, correction, and reasoning fields."

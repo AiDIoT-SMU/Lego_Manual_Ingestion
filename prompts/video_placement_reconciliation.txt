@@ -1,0 +1,118 @@
+You are reconciling a single LEGO placement from video evidence with the expected parts from the instruction manual.
+
+**YOUR TASK:**
+
+Analyze the annotated video frame showing a detected part placement and verify it against the expected parts for this step.
+
+**INPUTS:**
+
+1. **ANNOTATED FRAME**: Video frame with bounding box showing the detected placement
+2. **EXPECTED PARTS**: Reference images of parts required for the current manual step
+3. **PLACEMENT DATA**: Metadata about the detected placement from video analysis
+
+**PLACEMENT METADATA:**
+```json
+{placement_metadata}
+```
+
+**EXPECTED PARTS FOR STEP {step_number}:**
+```json
+{expected_parts}
+```
+
+**ANALYSIS REQUIREMENTS:**
+
+1. **Visual Verification**:
+   - Look at the bounding box in the annotated frame
+   - Compare the part visible in the bounding box to the expected parts reference images
+   - Count the studs (round bumps on top) to determine size accurately
+   - Verify color, type (brick/plate/tile), and dimensions
+
+2. **Part Matching**:
+   - Determine which expected part (if any) matches what's shown in the bounding box
+   - If the video detection matches an expected part, confirm it
+   - If the video detection is WRONG, identify the correct expected part
+   - If the expected parts don't include what's shown, note this as a discrepancy
+
+3. **Common Mistakes to Avoid**:
+   - 1x2 brick has 2 studs in a single row (rectangular, longer shape)
+   - 2x2 brick has 4 studs in a 2x2 grid (square shape)
+   - 2x4 brick has 8 studs in a 2x4 grid (rectangular, larger)
+   - Don't confuse brick (thick) vs plate (thin) vs tile (no studs on top)
+   - Pay careful attention to color shades (dark grey vs light grey, etc.)
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON:
+
+```json
+{
+  "verified": true,
+  "matched_part": {
+    "description": "dark grey 2x4 brick (1x)",
+    "color": "dark grey",
+    "type": "brick",
+    "size": "2x4",
+    "quantity": 1,
+    "confidence": 0.95
+  },
+  "video_detection_correct": true,
+  "correction": null,
+  "reasoning": "The bounding box clearly shows a dark grey brick with 8 studs arranged in a 2x4 pattern. This matches the expected 'dark grey 2x4 brick' from the manual's parts list. Color, size, and type all match."
+}
+```
+
+**OR if correction is needed:**
+
+```json
+{
+  "verified": true,
+  "matched_part": {
+    "description": "white 2x2 brick (1x)",
+    "color": "white",
+    "type": "brick",
+    "size": "2x2",
+    "quantity": 1,
+    "confidence": 0.9
+  },
+  "video_detection_correct": false,
+  "correction": {
+    "original_detection": "white 1x2 brick",
+    "corrected_to": "white 2x2 brick",
+    "reason": "The video detection identified this as a 1x2 brick, but counting the studs in the bounding box shows 4 studs in a 2x2 grid, not 2 studs in a row. This is clearly a 2x2 brick."
+  },
+  "reasoning": "Visual inspection of the bounding box shows a white brick with 4 studs arranged in a 2x2 square pattern. The video initially detected this as a 1x2 brick (which would be rectangular with 2 studs), but this is incorrect. The part matches the expected 'white 2x2 brick' from the manual."
+}
+```
+
+**OR if no match found:**
+
+```json
+{
+  "verified": false,
+  "matched_part": null,
+  "video_detection_correct": false,
+  "correction": {
+    "original_detection": "red 2x2 brick",
+    "corrected_to": null,
+    "reason": "The bounding box shows a red 2x2 brick, but the expected parts for this step do not include any red bricks. This may indicate: (1) wrong step assignment, (2) manual error, or (3) video detection error."
+  },
+  "reasoning": "The part visible in the bounding box appears to be a red 2x2 brick based on color and stud count, but none of the expected parts for step {step_number} match this description. Further investigation needed."
+}
+```
+
+**GUIDELINES:**
+
+1. **Trust Visual Evidence**: The bounding box shows the actual part used in the video
+2. **Use Reference Images**: Compare against the expected parts images carefully
+3. **Count Studs**: This is CRITICAL for accurate size identification
+4. **Prefer Manual Parts**: If the part matches an expected part, confirm it (trust the manual)
+5. **Flag Discrepancies**: If video shows a different part than expected, note the correction
+6. **Be Specific**: Include color, type, size, and quantity in your matched_part
+7. **High Confidence**: Only use confidence >= 0.8 if you're certain about the match
+
+**IMPORTANT:**
+- Return ONLY the JSON object, no additional text
+- Be precise with part dimensions by counting studs
+- If uncertain, lower the confidence score
+- Visual evidence (bounding box + reference images) is your primary source of truth

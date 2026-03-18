@@ -1,39 +1,19 @@
 You are analyzing consecutive placement frames from a LEGO assembly video to identify what new part was added.
 
-You have access to the EXPECTED PARTS LIST from the instruction manual to help with accurate part identification.
-
-**CRITICAL INSTRUCTIONS:**
-
-⚠️ **DO NOT HALLUCINATE** - Only report a new part if you can CLEARLY SEE it in the current frame
-⚠️ **BE CONSERVATIVE** - If unsure, set has_new_part: false rather than guessing
-⚠️ **IGNORE CAMERA MOVEMENT** - If the assembly looks the same but from a different angle, that's NOT a new part
-⚠️ **IDENTICAL FRAMES = NO NEW PART** - If the previous and current frames show the EXACT SAME assembly state (even if minor lighting/angle differences), you MUST set has_new_part: false
-⚠️ **FOLLOW STEP SEQUENCE** - Only match parts from the current manual step (provided below)
-⚠️ **NO GUESSING** - Do not infer or predict parts based on the expected parts list. Only report what you ACTUALLY SEE in the current frame.
-
 **YOUR TASK:**
 
 Compare the PREVIOUS PLACEMENT FRAME with the CURRENT PLACEMENT FRAME and determine:
-1. Was a new LEGO part **CLEARLY VISIBLE AND ACTUALLY ADDED**? (not just camera angle change)
-2. If yes, what specific part was added and WHERE IS IT in the current frame?
-3. Where was it placed?
-4. Does the part match the expected parts from the CURRENT manual step?
-
-**EXPECTED PARTS FROM MANUAL:**
-{expected_parts_list}
-
-**REFERENCE IMAGES PROVIDED:**
-- You will be shown cropped images of the expected parts from the instruction manual
-- You will be shown the expected subassembly image showing what the completed step should look like
-- Use these reference images to accurately identify parts and track assembly progress
-- Compare the current placement frame with the expected subassembly to determine if the step is complete
+1. Look at the CURRENT frame and identify every LEGO brick that is physically snapped onto studs (ignore hands, background, the table surface)
+2. Look at the PREVIOUS frame and do the same count — only bricks snapped onto studs, ignoring hands
+3. If the CURRENT frame has a brick that is clearly attached to the assembly and was NOT present in the PREVIOUS frame, report it as a new part
+4. If you are not sure whether what you see is a brick or a hand/shadow/part of the baseplate, do NOT report it
 
 **ANALYSIS GUIDELINES:**
 
 **Part Identification:**
 - Describe the part with: COLOR + TYPE + SIZE (e.g., "red 2x4 brick", "white round 2x2 brick")
-- **STRONGLY PREFER parts from the expected_parts_list** - trust the manual unless you are VERY confident it's wrong
-- Cross-reference with the expected parts list above
+- Only identify a part after you have observed it in the frame
+- Use the expected_parts_list to help name it accurately, but only if you already see it
 - If the part matches expected parts, set matched_from_manual: true
 - If the part doesn't match expected parts, still describe it accurately but set matched_from_manual: false
 
@@ -44,7 +24,6 @@ Compare the PREVIOUS PLACEMENT FRAME with the CURRENT PLACEMENT FRAME and determ
 - A 2x4 brick has 8 studs in a 2x4 grid (rectangular, larger)
 - Examine the brick's shape: rectangular vs square, tall vs flat
 - Common mistake: confusing 1x2 (rectangular, 2 studs) with 2x2 (square, 4 studs)
-- When in doubt, CHECK the expected_parts_list first before making assumptions
 
 **Spatial Positioning:**
 - **location**: Where on the assembly (e.g., "left side", "center", "top", "front edge")
@@ -53,14 +32,22 @@ Compare the PREVIOUS PLACEMENT FRAME with the CURRENT PLACEMENT FRAME and determ
 - **relative_position**: If applicable, describe position relative to other parts (e.g., "to the right of the red brick")
 
 **Duplicate Detection:**
-- If the two frames show EXACTLY the same assembly configuration → set has_new_part: false
-- Look carefully at every visible part - even small changes count
+- A frame is a duplicate when the assembly has the same attached bricks in the same configuration as the previous frame
+- Look carefully at every visible part — one additional brick in a row means a new part was added
+- If a hand is obscuring part of the assembly, do NOT assume a brick is hidden underneath — only count what is clearly visible
 - Background objects that aren't part of the active assembly should be ignored
 
 **Subassembly Handling:**
 - If the user is working on a separate subassembly (different from the main build), note it
 - Set is_subassembly_switch: true if the user switched to a different assembly area
 - Ignore parts in the background that aren't being actively assembled
+
+**Bounding Box Localization:**
+- If you claim `has_new_part: true`, you MUST provide a `box_2d` that tightly encloses the newly added part in the CURRENT PLACEMENT FRAME
+- Use the format `[ymin, xmin, ymax, xmax]` where each value is an integer from 0 to 1000, representing the position as a fraction of the frame's height/width (0 = top/left edge, 1000 = bottom/right edge)
+- Example: a part in the bottom-left quarter of the frame might be `[600, 50, 900, 300]`
+- If you are unable to precisely locate the newly added part in the CURRENT PLACEMENT FRAME, set `confidence` below 0.5 to indicate low certainty
+- If you set `has_new_part: false`, set `box_2d` to null
 
 **OUTPUT FORMAT:**
 
@@ -87,10 +74,11 @@ Return ONLY valid JSON:
     "orientation": "upright",
     "relative_position": "adjacent to the previous white brick"
   },
+  "box_2d": [400, 100, 650, 250],
   "is_duplicate_of_previous": false,
   "is_subassembly_switch": false,
   "confidence": 0.95,
-  "reasoning": "Clear view of new white 2x2 brick added to left side, matches expected parts from step 1"
+  "reasoning": "Clear view of new white 2x2 brick snapped to studs on the left side, not present in previous frame"
 }
 ```
 
@@ -103,10 +91,11 @@ If NO new part was added (duplicate frame):
   "new_parts_added": [],
   "action_description": null,
   "spatial_position": null,
+  "box_2d": null,
   "is_duplicate_of_previous": true,
   "is_subassembly_switch": false,
   "confidence": 1.0,
-  "reasoning": "Assembly state is identical to previous frame"
+  "reasoning": "Assembly state is identical to previous frame — same bricks, same positions"
 }
 ```
 
@@ -132,6 +121,7 @@ If this is the FIRST placement frame (no previous frame to compare):
     "orientation": "flat",
     "relative_position": "foundation layer"
   },
+  "box_2d": [100, 50, 900, 950],
   "is_duplicate_of_previous": false,
   "is_subassembly_switch": false,
   "confidence": 0.9,
@@ -140,9 +130,10 @@ If this is the FIRST placement frame (no previous frame to compare):
 ```
 
 **IMPORTANT:**
-- **ALWAYS check expected_parts_list FIRST** - only deviate if you're absolutely certain the manual is wrong
-- When a part visually resembles multiple options from the list, choose the one from expected_parts_list
-- Count studs carefully to differentiate 1x2 vs 2x2 vs 2x4 - this is CRITICAL for accuracy
+- Only report parts you can SEE in the CURRENT frame snapped onto studs — not parts you expect to be there
+- Use the expected_parts_list to help name/size a part you have already observed, not to find one
+- Count studs carefully to differentiate 1x2 vs 2x2 vs 2x4 — this is CRITICAL for accuracy
 - Be precise with colors (white vs light grey vs grey)
 - If multiple parts were added, include all in new_parts_added array
 - Do NOT include any text before or after the JSON
+- **Bounding box rule**: You must always provide a box_2d when has_new_part is true. If you cannot pinpoint where the new part is in the CURRENT frame, set confidence below 0.5 — do not guess a location
