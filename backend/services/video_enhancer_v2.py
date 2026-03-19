@@ -39,6 +39,56 @@ def _image_to_b64(img: PILImage.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+def _crop_to_bbox(
+    image_path: str,
+    box_2d: Optional[List[int]],
+    padding: int = 30
+) -> Optional[PILImage.Image]:
+    """
+    Crop image tightly to bounding box with padding.
+
+    This focuses the VLM's attention on the exact part being placed,
+    making stud counting and part identification more accurate.
+
+    Args:
+        image_path: Path to source image
+        box_2d: [ymin, xmin, ymax, xmax] each 0-1000, or None
+        padding: Pixels of padding around the bbox
+
+    Returns:
+        Cropped PIL Image, or None if bbox is invalid
+    """
+    if not box_2d or len(box_2d) != 4:
+        return None
+
+    try:
+        img = PILImage.open(str(image_path)).convert("RGB")
+        img_w, img_h = img.size
+
+        # Convert box_2d [ymin, xmin, ymax, xmax] from 0-1000 to pixels
+        bbox = _box2d_to_bbox(box_2d, img_w, img_h)
+
+        # Calculate crop box with padding
+        x_min = max(0, bbox.x - padding)
+        y_min = max(0, bbox.y - padding)
+        x_max = min(img_w, bbox.x + bbox.width + padding)
+        y_max = min(img_h, bbox.y + bbox.height + padding)
+
+        # Validate crop box
+        if x_max <= x_min or y_max <= y_min:
+            logger.warning(f"Invalid crop box after padding: ({x_min}, {y_min}, {x_max}, {y_max})")
+            return None
+
+        # Crop the image
+        cropped = img.crop((x_min, y_min, x_max, y_max))
+
+        return cropped
+
+    except Exception as e:
+        logger.warning(f"Failed to crop to bbox: {e}")
+        return None
+
+
 def _parse_quantity_from_description(description: str) -> int:
     """
     Parse quantity from part description.
@@ -955,7 +1005,17 @@ class VideoEnhancerV2:
         # Build content for VLM call
         content: List[Dict[str, Any]] = []
 
-        # 1. Add annotated frame (with bounding box)
+        # Get original frame path and box_2d for cropping
+        frame_path = placement.get("frame_path")
+        box_2d = placement.get("box_2d")
+
+        # Construct full frame path
+        if frame_path:
+            full_frame_path = self.settings.data_dir / frame_path
+        else:
+            full_frame_path = None
+
+        # 1. Add full annotated frame (with bounding box) for context
         annotated_frame_path = placement.get("annotated_frame_path")
         if annotated_frame_path:
             full_annotated_path = self.settings.data_dir / annotated_frame_path
@@ -965,7 +1025,7 @@ class VideoEnhancerV2:
                     annotated_b64 = _image_to_b64(annotated_img)
                     content.append({
                         "type": "text",
-                        "text": f"ANNOTATED FRAME (Placement {placement['placement_index']}, Frame {placement['frame_number']}):"
+                        "text": f"VIEW 1 - FULL FRAME CONTEXT (Placement {placement['placement_index']}, Frame {placement['frame_number']}):"
                     })
                     content.append({
                         "type": "image_url",
@@ -976,11 +1036,44 @@ class VideoEnhancerV2:
             else:
                 logger.warning(f"Annotated frame not found: {full_annotated_path}")
 
-        # 2. Add expected parts reference images
+        # 2. Add CROPPED view (tight crop to bounding box) - THIS IS CRITICAL FOR STUD COUNTING
+        if full_frame_path and full_frame_path.exists() and box_2d:
+            cropped_img = _crop_to_bbox(str(full_frame_path), box_2d, padding=30)
+            if cropped_img:
+                try:
+                    # Resize cropped image to reasonable size (keeping aspect ratio)
+                    max_size = 600
+                    if cropped_img.width > max_size or cropped_img.height > max_size:
+                        if cropped_img.width > cropped_img.height:
+                            new_w = max_size
+                            new_h = int(max_size * cropped_img.height / cropped_img.width)
+                        else:
+                            new_h = max_size
+                            new_w = int(max_size * cropped_img.width / cropped_img.height)
+                        cropped_img = cropped_img.resize((new_w, new_h), PILImage.Resampling.LANCZOS)
+
+                    cropped_b64 = _image_to_b64(cropped_img)
+                    content.append({
+                        "type": "text",
+                        "text": "VIEW 2 - ZOOMED TO PART (cropped to bounding box - USE THIS FOR STUD COUNTING):"
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{cropped_b64}"}
+                    })
+                    logger.debug(f"Added cropped bbox view for placement {placement['placement_index']}")
+                except Exception as e:
+                    logger.warning(f"Could not process cropped image: {e}")
+            else:
+                logger.debug(f"Could not crop to bbox for placement {placement['placement_index']}")
+        else:
+            logger.debug(f"Skipping bbox crop - frame_path: {full_frame_path}, box_2d: {box_2d}")
+
+        # 3. Add expected parts reference images
         if expected_parts:
             content.append({
                 "type": "text",
-                "text": f"EXPECTED PARTS FOR STEP {step_number} (reference images):"
+                "text": f"VIEW 3 - EXPECTED PARTS FOR STEP {step_number} (reference images from manual):"
             })
             for idx, part in enumerate(expected_parts):
                 part_img_path = part.get("cropped_image_path")
@@ -1001,7 +1094,7 @@ class VideoEnhancerV2:
                         except Exception as e:
                             logger.warning(f"Could not load part image {part_img_path}: {e}")
 
-        # 3. Build placement metadata JSON
+        # 4. Build placement metadata JSON
         placement_metadata = {
             "placement_index": placement["placement_index"],
             "frame_number": placement["frame_number"],
@@ -1012,7 +1105,7 @@ class VideoEnhancerV2:
             "confidence": placement.get("confidence", 0.0)
         }
 
-        # 4. Build expected parts JSON (without images)
+        # 5. Build expected parts JSON (without images)
         expected_parts_json = [
             {
                 "description": part["description"],
@@ -1021,7 +1114,7 @@ class VideoEnhancerV2:
             for part in expected_parts
         ]
 
-        # 5. Build prompt from template
+        # 6. Build prompt from template
         prompt = self.placement_reconciliation_template.replace(
             "{placement_metadata}", json.dumps(placement_metadata, indent=2)
         ).replace(
