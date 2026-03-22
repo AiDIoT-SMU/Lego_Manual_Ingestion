@@ -1315,7 +1315,10 @@ class VideoEnhancerV2:
             # Get placements for this step
             step_placements = placements_by_step_and_order.get(step_num, [])
 
-            # Enrich each sub-step with frame path and reconciliation data
+            # Track corrections (simple summary)
+            corrections_summary = []
+
+            # Enrich each sub-step with frame path and APPLY reconciliation corrections
             enriched_sub_steps = []
             for idx, sub_step in enumerate(sub_steps):
                 # Match sub-step to placement by order (assuming VLM maintains sequence)
@@ -1323,22 +1326,61 @@ class VideoEnhancerV2:
                     placement = step_placements[idx]
                     reconciliation = placement.get("reconciliation", {})
 
-                    enriched_sub_steps.append({
-                        **sub_step,
-                        "frame_path": placement.get("frame_path"),
-                        "frame_number": placement.get("frame_number"),
-                        "timestamp": placement.get("timestamp"),
-                        "reconciliation": reconciliation
-                    })
+                    # Extract corrected part information from reconciliation
+                    matched_part = reconciliation.get("matched_part")
+                    verified = reconciliation.get("verified", False)
+
+                    # Use reconciled part description if available, otherwise fall back to sub_step
+                    if matched_part and verified:
+                        # Use the CORRECTED part from reconciliation
+                        corrected_part_desc = matched_part.get("description", sub_step.get("parts_involved", ["unknown"])[0])
+                        corrected_confidence = matched_part.get("confidence", sub_step.get("confidence", 0.0))
+
+                        # Check if reconciliation made a correction
+                        video_detection_correct = reconciliation.get("video_detection_correct", True)
+                        if not video_detection_correct:
+                            # Track simple correction summary
+                            correction_info = reconciliation.get("correction", {})
+                            if correction_info:
+                                corrections_summary.append({
+                                    "sub_step": sub_step.get("sub_step_number"),
+                                    "original": correction_info.get("original_detection", ""),
+                                    "corrected_to": corrected_part_desc
+                                })
+
+                        enriched_sub_steps.append({
+                            **sub_step,
+                            "parts_involved": [corrected_part_desc],  # Use reconciled part
+                            "confidence": corrected_confidence,  # Use reconciled confidence
+                            "frame_path": placement.get("frame_path"),
+                            "frame_number": placement.get("frame_number"),
+                            "timestamp": placement.get("timestamp"),
+                            "verified": verified  # Keep minimal metadata: true/false
+                        })
+                    else:
+                        # Reconciliation failed or not verified - use original sub_step data
+                        enriched_sub_steps.append({
+                            **sub_step,
+                            "frame_path": placement.get("frame_path"),
+                            "frame_number": placement.get("frame_number"),
+                            "timestamp": placement.get("timestamp"),
+                            "verified": False
+                        })
                 else:
                     # No matching placement found
                     enriched_sub_steps.append(sub_step)
 
-            enhanced_steps.append({
+            # Build enhanced step with clean corrections (if any)
+            step_data = {
                 **step,
-                "sub_steps": enriched_sub_steps,
-                "corrections": reconciled.get("corrections", [])
-            })
+                "sub_steps": enriched_sub_steps
+            }
+
+            # Only include corrections if there were any
+            if corrections_summary:
+                step_data["corrections"] = corrections_summary
+
+            enhanced_steps.append(step_data)
 
         return {
             "manual_id": manual_id,
