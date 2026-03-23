@@ -6,6 +6,7 @@ Tests the improved 3-pass pipeline with the complete video.
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from loguru import logger
 
@@ -15,33 +16,106 @@ from backend.services.video_enhancer_v2 import VideoEnhancerV2
 from config.settings import get_settings
 
 
+def clear_cache(settings, manual_id: str, video_id: str):
+    """Clear all cache files related to this video processing."""
+    logger.info("=" * 80)
+    logger.info("CLEARING CACHE")
+    logger.info("=" * 80)
+
+    processed_dir = settings.data_dir / "processed" / manual_id
+    videos_dir = settings.data_dir / "videos" / manual_id
+
+    cache_items = [
+        # VLM Pass 1: Frame quality classification cache
+        (processed_dir / f"video_frame_quality_{video_id}.json", "Frame quality cache"),
+
+        # VLM Pass 2: Validated placements cache
+        (processed_dir / f"video_validated_placements_{video_id}.json", "Validated placements cache"),
+
+        # VLM Pass 3: Reconciled placements cache
+        (processed_dir / f"video_reconciled_placements_{video_id}.json", "Reconciled placements cache"),
+
+        # VLM Pass 4: Final output
+        (processed_dir / f"video_enhanced_v2_{video_id}.json", "Final enhanced output"),
+
+        # Extracted frames directory
+        (videos_dir / f"{video_id}_enhancement_frames_v2", "Extracted frames directory"),
+
+        # Annotated frames from YOLO-World + SAM3
+        (processed_dir / f"yolo_world_sam3_annotated_{video_id}", "YOLO-World + SAM3 annotated frames"),
+
+        # Annotated frames from placement validation
+        (processed_dir / f"validated_placement_annotated_{video_id}", "Validated placement annotated frames"),
+
+        # Annotated frames from reconciliation
+        (processed_dir / f"reconciled_placement_annotated_{video_id}", "Reconciled placement annotated frames"),
+    ]
+
+    removed_count = 0
+    for path, description in cache_items:
+        if path.exists():
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                    logger.info(f"  ✓ Removed {description}: {path}")
+                else:
+                    path.unlink()
+                    logger.info(f"  ✓ Removed {description}: {path}")
+                removed_count += 1
+            except Exception as e:
+                logger.warning(f"  ✗ Failed to remove {description}: {e}")
+        else:
+            logger.debug(f"  - Not found: {description}")
+
+    if removed_count == 0:
+        logger.info("  No cache files found to remove")
+    else:
+        logger.info(f"\nRemoved {removed_count} cache items")
+
+    logger.info("=" * 80)
+    logger.info("")
+
+
 async def main():
     """Run video enhancement V2 test."""
     logger.info("=" * 80)
     logger.info("Testing Video Enhancer V2 (Improved 3-Pass Pipeline)")
     logger.info("=" * 80)
 
-    # Initialize services
+    # Test parameters
+    manual_id = "111111"
+    video_id = "changi_airport"
+    max_frames = 500  # Limit to first 500 frames for testing (None = entire video)
+
+    # Initialize settings
     settings = get_settings()
+
+    # Ask if user wants to clear cache
+    logger.info("")
+    logger.info(f"Manual ID: {manual_id}")
+    logger.info(f"Video ID: {video_id}")
+    logger.info(f"Max frames: {max_frames if max_frames else 'All (entire video)'}")
+    logger.info("")
+
+    clear_cache_input = input("Do you want to clear cache before running? (y/n): ").strip().lower()
+
+    if clear_cache_input in ['y', 'yes']:
+        clear_cache(settings, manual_id, video_id)
+    else:
+        logger.info("Keeping existing cache (will resume from cached results)")
+        logger.info("")
+
+    # Initialize services
     vlm_extractor = VLMExtractor(
         vlm_model=settings.vlm_model,
         api_key=settings.gemini_api_key,
-        max_retries=settings.vlm_max_retries
+        max_retries=settings.vlm_max_retries,
+        timeout=settings.vlm_timeout
     )
     data_service = DataService()
 
     # Create V2 enhancer
     enhancer_v2 = VideoEnhancerV2(vlm_extractor, data_service, settings)
-
-    # Test parameters
-    manual_id = "111111"
-    video_id = "changi_airport"
-    max_frames = None  # Process entire video
-
-    logger.info(f"Manual ID: {manual_id}")
-    logger.info(f"Video ID: {video_id}")
-    logger.info(f"Max frames: {'All (entire video)' if max_frames is None else max_frames}")
-    logger.info("")
 
     # Verify inputs exist
     video_path = settings.data_dir / "videos" / manual_id / f"{video_id}.mp4"
@@ -55,8 +129,10 @@ async def main():
         logger.error(f"Enhanced.json not found: {enhanced_path}")
         return
 
-    logger.info(f"Video path: {video_path}")
-    logger.info(f"Enhanced.json path: {enhanced_path}")
+    logger.info("")
+    logger.info("STARTING VIDEO ENHANCEMENT")
+    logger.info(f"  Video path: {video_path}")
+    logger.info(f"  Enhanced.json path: {enhanced_path}")
     logger.info("")
 
     # Run the enhanced pipeline
@@ -80,6 +156,16 @@ async def main():
         logger.info("=" * 80)
         logger.info(f"Output saved to: {output_path}")
         logger.info("")
+
+        # Show where annotated frames are saved
+        annotated_frames_dir = settings.data_dir / "processed" / manual_id / f"yolo_world_sam3_annotated_{video_id}"
+        if annotated_frames_dir.exists():
+            frame_count = len(list(annotated_frames_dir.glob("*.jpg")))
+            logger.info("ANNOTATED FRAMES:")
+            logger.info(f"  Location: {annotated_frames_dir}")
+            logger.info(f"  Count: {frame_count} frames with YOLO-World + SAM3 annotations")
+            logger.info(f"  View these frames to see bounding boxes and object counts!")
+            logger.info("")
 
         # Print summary statistics
         total_steps = len(result["steps"])

@@ -130,17 +130,19 @@ class VLMExtractor:
         vlm_model: str,
         api_key: str,
         max_retries: int = 3,
+        timeout: int = 60,
         spatial_prompt_template: str = "",
     ):
         self.litellm_model = vlm_model
         # google-genai uses bare model name without the "gemini/" litellm prefix
         self.genai_model = vlm_model.split("/", 1)[-1]
         self.max_retries = max_retries
+        self.timeout = timeout
         self.spatial_prompt_template = spatial_prompt_template
         self.genai_client = genai.Client(api_key=api_key)
         os.environ["GEMINI_API_KEY"] = api_key
         litellm.drop_params = True
-        logger.info(f"VLMExtractor ready — semantic: {self.litellm_model} | spatial: {self.genai_model}")
+        logger.info(f"VLMExtractor ready — semantic: {self.litellm_model} | spatial: {self.genai_model} | timeout: {self.timeout}s")
 
     # ── public ───────────────────────────────────────────────────────────────
 
@@ -289,6 +291,7 @@ class VLMExtractor:
                     messages=messages,
                     temperature=0.5,
                     max_tokens=65535,
+                    timeout=self.timeout,
                 )
                 msg = response.choices[0].message
                 text = msg.content

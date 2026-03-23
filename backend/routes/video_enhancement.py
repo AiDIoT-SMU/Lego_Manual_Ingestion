@@ -27,7 +27,8 @@ def get_video_enhancer() -> VideoEnhancerV2:
     settings = Settings()
     vlm_extractor = VLMExtractor(
         vlm_model=settings.vlm_model,
-        api_key=settings.gemini_api_key
+        api_key=settings.gemini_api_key,
+        timeout=settings.vlm_timeout
     )
     data_service = DataService()
     return VideoEnhancerV2(vlm_extractor, data_service, settings)
