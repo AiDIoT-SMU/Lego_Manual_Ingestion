@@ -85,7 +85,7 @@ async def main():
     # Test parameters
     manual_id = "111111"
     video_id = "changi_airport"
-    max_frames = 1000  # Limit to first 1000 frames for testing (None = entire video)
+    max_frames = None  # Process entire video (set to integer to limit frames)
 
     # Initialize settings
     settings = get_settings()
@@ -170,12 +170,10 @@ async def main():
         # Print summary statistics
         total_steps = len(result["steps"])
         total_substeps = sum(len(step.get("sub_steps", [])) for step in result["steps"])
-        total_corrections = sum(len(step.get("corrections", [])) for step in result["steps"])
 
         logger.info("SUMMARY STATISTICS:")
         logger.info(f"  Total steps: {total_steps}")
         logger.info(f"  Total sub-steps: {total_substeps}")
-        logger.info(f"  Total corrections: {total_corrections}")
         logger.info(f"  Average sub-steps per step: {total_substeps / total_steps:.1f}" if total_steps > 0 else "  No steps")
         logger.info("")
 
