@@ -1,0 +1,26 @@
+You are analyzing action frames between two LEGO assembly placement frames.
+
+ACTION FRAMES are frames where the builder's hands are visible, holding, moving, or positioning a LEGO part. Your task is to identify WHAT PART is being manipulated in these action frames.
+
+TASK:
+1. Look at all the action frames provided (in sequence)
+2. Identify what LEGO part the hands are holding/moving/positioning
+3. Determine if this part is being PICKED UP (from the table/pile) or being ADJUSTED (already placed on the assembly)
+
+Return JSON:
+{
+  "part_being_manipulated": "description of the part (e.g., 'red round 2x2 tile', 'white 1x2 brick')",
+  "color": "color of the part",
+  "part_type": "type (e.g., 'brick', 'plate', 'tile', 'round tile')",
+  "size": "size notation (e.g., '1x2', '2x4')",
+  "action_type": "pickup" or "adjustment",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation of what you observed"
+}
+
+IMPORTANT DISTINCTIONS:
+- **PICKUP**: Part is being picked up from a pile/table to be placed on the assembly for the FIRST TIME
+- **ADJUSTMENT**: Part is already on the assembly and is being touched/adjusted/pressed down (NOT a new placement)
+
+If you see the part already attached to the assembly in the first action frame, it's likely an ADJUSTMENT.
+If you see the part being lifted from a pile/table, it's a PICKUP for a new placement.

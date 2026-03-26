@@ -24,6 +24,7 @@ logs/
 data/cropped/
 data/manuals/
 data/processed/
+data/visualisation/*.jpg
 
 # Generated brick library (meshes and point clouds - can be rebuilt)
 data/brick_library/
@@ -33,6 +34,16 @@ data/ldraw_library/
 
 # LEGO Studio source files (optional - uncomment if you don't want to commit these)
 # data/Lego Studio/
+
+# Video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+data/videos/
 
 # Test artifacts
 tests/output/

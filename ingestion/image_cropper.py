@@ -71,6 +71,11 @@ class ImageCropper:
                         logger.error(
                             f"Failed to crop part {i} from step {step_num}: {e}"
                         )
+                else:
+                    # No bbox detected - skip cropping, leave cropped_image_path as None
+                    logger.warning(
+                        f"No bounding box for part '{part.description}' in step {step_num}"
+                    )
 
             # Crop subassemblies
             for i, subassembly in enumerate(step.subassemblies):

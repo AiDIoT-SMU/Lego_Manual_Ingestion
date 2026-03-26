@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from "react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type InputMode = "url" | "upload";
+type InputMode = "url" | "pdf" | "upload" | "video";
 type ImageRole = "instruction" | "assembled" | "parts";
 type Status = "idle" | "submitting" | "success" | "error";
 
@@ -119,6 +119,140 @@ function FileDropzone({ onFiles }: { onFiles: (files: File[]) => void }) {
   );
 }
 
+function PdfDropzone({
+  file,
+  onFile,
+}: {
+  file: File | null;
+  onFile: (f: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const f = Array.from(e.dataTransfer.files).find(
+        (x) => x.type === "application/pdf"
+      );
+      if (f) onFile(f);
+    },
+    [onFile]
+  );
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      onClick={() => inputRef.current?.click()}
+      className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+        dragging
+          ? "border-yellow-400 bg-yellow-400/5"
+          : file
+          ? "border-green-500 bg-green-500/5"
+          : "border-gray-700 hover:border-gray-500"
+      }`}
+    >
+      {file ? (
+        <div>
+          <p className="text-green-400 text-sm font-medium">{file.name}</p>
+          <p className="text-gray-500 text-xs mt-1">
+            {(file.size / 1024 / 1024).toFixed(2)} MB — click to replace
+          </p>
+        </div>
+      ) : (
+        <div>
+          <p className="text-gray-400 text-sm">
+            Drag & drop a PDF here, or{" "}
+            <span className="text-yellow-400 underline">click to select</span>
+          </p>
+          <p className="text-gray-600 text-xs mt-1">PDF only</p>
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
+function VideoDropzone({
+  onFile,
+  currentFile
+}: {
+  onFile: (file: File) => void;
+  currentFile: File | null;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const files = Array.from(e.dataTransfer.files);
+      const videoFile = files.find(f =>
+        f.type.startsWith("video/") ||
+        /\.(mp4|mov|avi)$/i.test(f.name)
+      );
+      if (videoFile) onFile(videoFile);
+    },
+    [onFile]
+  );
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      onClick={() => inputRef.current?.click()}
+      className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
+        dragging ? "border-yellow-400 bg-yellow-400/5" :
+        currentFile ? "border-green-500 bg-green-500/5" :
+        "border-gray-700 hover:border-gray-500"
+      }`}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept="video/mp4,video/quicktime,video/x-msvideo,.mp4,.mov,.avi"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onFile(file);
+          e.target.value = "";
+        }}
+        className="hidden"
+      />
+      {currentFile ? (
+        <div>
+          <p className="text-green-400 text-sm font-medium">✓ {currentFile.name}</p>
+          <p className="text-gray-500 text-xs mt-1">
+            {(currentFile.size / 1024 / 1024).toFixed(2)} MB — click to replace
+          </p>
+        </div>
+      ) : (
+        <div>
+          <p className="text-gray-400 text-sm">
+            Drag & drop a video here, or{" "}
+            <span className="text-yellow-400 underline">click to select</span>
+          </p>
+          <p className="text-gray-600 text-xs mt-1">Supports MP4, MOV, AVI</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function IngestPage() {
@@ -133,8 +267,15 @@ export default function IngestPage() {
   const [url, setUrl] = useState("");
   const [urlPages, setUrlPages] = useState("");
 
+  // PDF upload mode
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfPages, setPdfPages] = useState("");
+
   // Upload mode
   const [staged, setStaged] = useState<StagedFile[]>([]);
+
+  // Video mode
+  const [videoFile, setVideoFile] = useState<File | null>(null);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -178,6 +319,11 @@ export default function IngestPage() {
     try {
       if (mode === "url") {
         await submitUrl();
+      } else if (mode === "pdf") {
+        await submitPdf();
+      } else if (mode === "video") {
+        await submitVideo();
+        return; // submitVideo handles its own status/redirect
       } else {
         await submitUpload();
       }
@@ -199,6 +345,22 @@ export default function IngestPage() {
     if (pages.length) form.append("instruction_pages", JSON.stringify(pages));
 
     const res = await fetch("/api/ingest/url", { method: "POST", body: form });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.detail ?? `Server error ${res.status}`);
+    }
+  }
+
+  async function submitPdf() {
+    if (!pdfFile) throw new Error("A PDF file is required.");
+
+    const pages = parsePageInput(pdfPages);
+    const form = new FormData();
+    form.append("manual_id", manualId.trim());
+    form.append("pdf_file", pdfFile);
+    if (pages.length) form.append("instruction_pages", JSON.stringify(pages));
+
+    const res = await fetch("/api/ingest/pdf", { method: "POST", body: form });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data?.detail ?? `Server error ${res.status}`);
@@ -230,13 +392,48 @@ export default function IngestPage() {
     }
   }
 
+  async function submitVideo() {
+    if (!videoFile) {
+      setMessage("Please select a video file");
+      setStatus("error");
+      return;
+    }
+
+    setStatus("submitting");
+    setMessage("Uploading video and starting enhancement...");
+
+    try {
+      const { uploadAndEnhanceVideo } = await import("@/lib/api");
+
+      // Upload video and directly start enhancement (bypasses video_analyzer)
+      // This processes the ENTIRE video (no 1000 frame limit)
+      const result = await uploadAndEnhanceVideo(manualId, videoFile);
+
+      setStatus("success");
+      setMessage(
+        `Video uploaded successfully! Enhancement is processing in the background.\n\n` +
+        `Video ID: ${result.video_id}\n\n` +
+        `The system is now:\n` +
+        `1. Extracting frames from the entire video (every 30 frames)\n` +
+        `2. Running VLM action detection on all frames\n` +
+        `3. Extracting spatial placement information\n` +
+        `4. Reconciling with manual and generating corrections\n\n` +
+        `This may take several minutes depending on video length. ` +
+        `The video_enhanced.json will be created when complete.`
+      );
+    } catch (err) {
+      setStatus("error");
+      setMessage(err instanceof Error ? err.message : "Enhancement failed");
+    }
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-1">Ingest Manual</h1>
       <p className="text-gray-400 text-sm mb-8">
-        Process a LEGO instruction manual via URL or image upload.
+        Process a LEGO instruction manual via URL, PDF upload, or image upload.
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -261,7 +458,7 @@ export default function IngestPage() {
             Input source
           </label>
           <div className="flex rounded-lg overflow-hidden border border-gray-700 w-fit">
-            {(["url", "upload"] as InputMode[]).map((m) => (
+            {(["url", "pdf", "upload", "video"] as InputMode[]).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -272,7 +469,7 @@ export default function IngestPage() {
                     : "bg-gray-800 text-gray-400 hover:text-white"
                 }`}
               >
-                {m === "url" ? "URL" : "Upload Images"}
+                {m === "url" ? "URL" : m === "pdf" ? "Upload PDF" : m === "video" ? "Video" : "Upload Images"}
               </button>
             ))}
           </div>
@@ -307,6 +504,29 @@ export default function IngestPage() {
               />
               <p className="text-xs text-gray-500 mt-1">
                 Ranges (13-20) and individual numbers (25, 30) are both supported.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── PDF upload mode ── */}
+        {mode === "pdf" && (
+          <div className="space-y-4">
+            <PdfDropzone file={pdfFile} onFile={setPdfFile} />
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">
+                Instruction pages
+                <span className="text-gray-500 font-normal ml-2">(optional — blank = all pages)</span>
+              </label>
+              <input
+                type="text"
+                value={pdfPages}
+                onChange={(e) => setPdfPages(e.target.value)}
+                placeholder="e.g. 13-20, 25, 30"
+                className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Ranges (13-20) and individual numbers (25, 30) are both supported. Leave blank to process all pages.
               </p>
             </div>
           </div>
@@ -416,6 +636,28 @@ export default function IngestPage() {
           </div>
         )}
 
+        {/* ── Video mode ── */}
+        {mode === "video" && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-400">
+              Upload an assembly video to enrich this manual with spatial sub-steps, detailed
+              placement instructions, and corrections derived from the video.
+              The manual must already be ingested.
+            </p>
+
+            <VideoDropzone
+              onFile={(file) => setVideoFile(file)}
+              currentFile={videoFile}
+            />
+
+            {videoFile && (
+              <div className="text-sm text-gray-300 p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                <span className="text-green-400 font-medium">✓ Ready to upload:</span> {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(2)} MB)
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Status messages */}
         {status === "error" && (
           <div className="px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
@@ -434,7 +676,11 @@ export default function IngestPage() {
           disabled={status === "submitting"}
           className="w-full py-3 rounded-lg bg-yellow-400 text-gray-900 font-semibold hover:bg-yellow-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {status === "submitting" ? "Submitting…" : "Start Ingestion"}
+          {status === "submitting"
+            ? "Submitting…"
+            : mode === "video"
+            ? "Upload & Enhance Manual"
+            : "Start Ingestion"}
         </button>
       </form>
     </div>

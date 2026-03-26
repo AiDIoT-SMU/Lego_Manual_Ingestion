@@ -1,0 +1,80 @@
+You are analyzing frames from a LEGO assembly video to classify their relevance and quality.
+
+For EACH frame shown, determine:
+1. **Relevance**: Is this frame showing actual LEGO assembly, or is it irrelevant (title screen, blank, off-topic)?
+2. **Frame Type**: If relevant, is it an ACTION frame (hands actively manipulating parts) or a PLACEMENT_CANDIDATE frame (stable state, part has been placed, hands mostly clear)?
+3. **Quality Assessment**: Rate the frame quality for instruction extraction
+
+**CLASSIFICATION CRITERIA:**
+
+IRRELEVANT frames:
+- Title screens, credits, blank/black frames
+- No LEGO assembly visible
+- Camera transitions, blurry motion
+- Setup/teardown not showing assembly steps
+
+ACTION frames:
+- Hands actively holding, moving, or positioning a LEGO part
+- Part is being manipulated but not yet in final position
+- Motion blur or unstable view while placing
+- Intermediate state during assembly action
+
+PLACEMENT_CANDIDATE frames:
+- LEGO part has been placed in its final position
+- Hands are clear or mostly out of the way
+- Stable, clear view of the assembly state
+- Can clearly see what was just added
+- Assembly appears stationary (not moving)
+
+**QUALITY METRICS:**
+
+For each frame, assess:
+- **has_hand_obstruction**: Are hands blocking the view of the assembly? (true/false)
+- **is_stable**: Is the frame clear and stable, or is there motion blur? (true/false)
+- **quality_score**: Overall quality for instruction extraction (0.0 = poor, 1.0 = excellent)
+  - High quality (0.8-1.0): Clear, stable, hands clear, good lighting
+  - Medium quality (0.5-0.7): Mostly clear, minor hand obstruction or slight blur
+  - Low quality (0.0-0.4): Blurry, heavily obstructed, poor lighting
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON as an array with one entry per frame, in the SAME ORDER as the frames were shown:
+
+```json
+[
+  {
+    "is_relevant": true,
+    "frame_type": "placement_candidate",
+    "has_hand_obstruction": false,
+    "is_stable": true,
+    "quality_score": 0.9,
+    "confidence": 0.95,
+    "reasoning": "Clear view of completed placement, hands clear, stable frame"
+  },
+  {
+    "is_relevant": true,
+    "frame_type": "action",
+    "has_hand_obstruction": true,
+    "is_stable": false,
+    "quality_score": 0.3,
+    "confidence": 0.85,
+    "reasoning": "Hands holding part, motion blur visible"
+  },
+  {
+    "is_relevant": false,
+    "frame_type": null,
+    "has_hand_obstruction": false,
+    "is_stable": true,
+    "quality_score": 0.0,
+    "confidence": 1.0,
+    "reasoning": "Title screen with text"
+  }
+]
+```
+
+**IMPORTANT:**
+- Return EXACTLY one entry per frame shown
+- Maintain the same order as the input frames
+- Set frame_type to null if is_relevant is false
+- Be conservative with placement_candidate classification - only use it for clear, stable states
+- Do NOT include any text before or after the JSON array

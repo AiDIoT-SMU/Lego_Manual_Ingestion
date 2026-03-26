@@ -15,13 +15,19 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = None
     vlm_model: str = "gemini/gemini-robotics-er-1.5-preview"
     vlm_max_retries: int = 3
-    vlm_timeout: int = 60  # seconds
+    vlm_timeout: int = 300  # seconds (5 minutes for large multi-image requests)
+    frame_classification_batch_size: int = 8  # frames per VLM call in video enhancement
+    placement_min_confidence: float = 0.6  # minimum VLM confidence to accept a detected placement
+
+    # Roboflow API Configuration (for Grounding DINO + SAM3)
+    roboflow_api_key: str
 
     # Paths (relative to project root)
     data_dir: Path = Path("./data")
     manual_dir: Path = Path("./data/manuals")
     processed_dir: Path = Path("./data/processed")
     cropped_dir: Path = Path("./data/cropped")
+    videos_dir: Path = Path("./data/videos")
     brick_library_dir: Path = Path("./data/brick_library")
 
     # Backend Configuration

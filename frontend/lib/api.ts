@@ -42,13 +42,15 @@ export interface ManualSteps {
 }
 
 export interface PartCatalogEntry {
-  description: string;
-  images: string[];
+  description: string;          // Clean description without "(1x)" suffix
+  images: string[];             // May be empty if detection failed
   used_in_steps: number[];
+  total_quantity: number;       // Total count across all steps
 }
 
 export interface PartsCatalog {
   manual_id: string;
+  total_unique_parts: number;   // Count of unique parts
   parts: PartCatalogEntry[];
 }
 
@@ -261,6 +263,8 @@ export async function ingestImages(
   return res.json();
 }
 
+// ─── Assembly Analysis ────────────────────────────────────────────────────────
+
 export async function fetchAnalysisItems(): Promise<{ items: AnalysisItem[] }> {
   const res = await fetch(`${API_BASE}/api/assembly/items`);
   if (!res.ok) throw new Error(`Failed to fetch analysis items: ${res.status}`);
@@ -292,4 +296,189 @@ export async function analyzeAssemblyVideo(
 
 export function analysisAssetUrl(path: string): string {
   return `${API_BASE}/api/assembly/asset?path=${encodeURIComponent(path)}`;
+}
+
+// ─── Video Analysis ────────────────────────────────────────────────────────────
+
+export interface StepTimelineEntry {
+  step_number: number;
+  start_time: number;
+  end_time: number;
+  duration_seconds: number;
+  confidence_avg: number;
+  frame_numbers: number[];
+}
+
+export interface PartUsage {
+  first_seen_timestamp: number;
+  last_seen_timestamp: number;
+  marked_as_used: boolean;
+  usage_confidence: number;
+  frames_visible: number[];
+}
+
+export interface VideoAnalysis {
+  video_id: string;
+  manual_id: string;
+  video_filename: string;
+  total_duration_seconds: number;
+  total_frames_extracted: number;
+  processed_at: string;
+  step_timeline: StepTimelineEntry[];
+  parts_used: Record<string, PartUsage>;
+  frame_analyses: Array<{
+    frame_number: number;
+    timestamp_seconds: number;
+    detected_step: number | null;
+    step_confidence: number;
+    detected_parts: string[];
+    parts_confidence: number;
+  }>;
+}
+
+export async function uploadVideo(
+  manualId: string,
+  videoFile: File
+): Promise<{ video_id: string; status: string; message: string }> {
+  const form = new FormData();
+  form.append("manual_id", manualId);
+  form.append("video_file", videoFile);
+
+  const res = await fetch(`${API_BASE}/api/video/upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `Upload failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function fetchVideoAnalysis(
+  manualId: string,
+  videoId: string
+): Promise<VideoAnalysis> {
+  const res = await fetch(`${API_BASE}/api/video/analysis/${manualId}/${videoId}`);
+  if (!res.ok) throw new Error(`Failed to fetch video analysis: ${res.status}`);
+  return res.json();
+}
+
+export async function listVideos(
+  manualId: string
+): Promise<Array<{ video_id: string; filename: string; duration_seconds: number; processed_at: string }>> {
+  const res = await fetch(`${API_BASE}/api/video/list/${manualId}`);
+  if (!res.ok) throw new Error(`Failed to list videos: ${res.status}`);
+  return res.json();
+}
+
+// ─── Video-Enhanced Assembly Instructions ─────────────────────────────────────
+
+export interface SpatialDescription {
+  target_part: string;
+  placement_part: string;
+  location: string;
+  position_detail: string;
+  orientation: string | null;
+  relative_to: string | null;
+}
+
+export interface SubStep {
+  sub_step_number: string;
+  action_type: 'pick' | 'place' | 'attach' | 'rotate' | 'verify';
+  description: string;
+  parts_involved: string[];
+  spatial_description: SpatialDescription | null;
+  frame_range: {
+    start_frame: number;
+    end_frame: number;
+    start_time: number;
+    end_time: number;
+  };
+  confidence: number;
+}
+
+export interface Correction {
+  field: string;
+  original_value: any;
+  corrected_value: any;
+  reason: string;
+  confidence: number;
+}
+
+export interface VideoEnhancedStep extends Step {
+  original_manual_step: number;
+  sub_steps: SubStep[];
+  corrections: Correction[];
+}
+
+export interface VideoEnhancedManual {
+  manual_id: string;
+  source_video_id: string;
+  created_at: string;
+  video_metadata: {
+    duration_seconds: number;
+    frame_count: number;
+    filename: string;
+  };
+  steps: VideoEnhancedStep[];
+  manual_step_mapping: Record<string, number[]>;
+}
+
+export async function uploadAndEnhanceVideo(
+  manualId: string,
+  videoFile: File
+): Promise<{ video_id: string; status: string; message: string }> {
+  const form = new FormData();
+  form.append("manual_id", manualId);
+  form.append("video_file", videoFile);
+
+  const res = await fetch(`${API_BASE}/api/video/upload-and-enhance`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `Upload and enhance failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function enhanceManualWithVideo(
+  manualId: string,
+  videoId: string
+): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_BASE}/api/video/enhance/${manualId}/${videoId}`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { detail?: string }).detail ?? `Enhancement failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchVideoEnhancedSteps(
+  manualId: string
+): Promise<VideoEnhancedManual> {
+  const res = await fetch(`${API_BASE}/api/video/manuals/${manualId}/video-enhanced`);
+  if (!res.ok) throw new Error(`Failed to fetch video-enhanced steps: ${res.status}`);
+  return res.json();
+}
+
+export async function listVideoEnhancements(
+  manualId: string
+): Promise<Array<{
+  video_id: string;
+  created_at: string;
+  sub_steps_count: number;
+  corrections_count: number;
+}>> {
+  const res = await fetch(`${API_BASE}/api/video/manuals/${manualId}/video-enhanced/list`);
+  if (!res.ok) throw new Error(`Failed to list video enhancements: ${res.status}`);
+  return res.json();
 }

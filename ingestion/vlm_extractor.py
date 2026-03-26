@@ -23,6 +23,7 @@ from pathlib import Path
 from loguru import logger
 
 import litellm
+import httpx
 from PIL import Image as PILImage
 from google import genai
 from google.genai import types
@@ -81,9 +82,61 @@ def _image_to_b64(img: PILImage.Image, mime: str = "image/png") -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _build_spatial_prompt(template: str, n_steps: int) -> str:
-    """Inject n_steps into the spatial prompt template loaded from file."""
-    return template.replace("{n_steps}", str(n_steps))
+def _patch_litellm_timeout(timeout_seconds: int) -> None:
+    """
+    Patch litellm's default HTTP timeout.
+
+    litellm uses a hard-coded _DEFAULT_TIMEOUT of 5 seconds for all HTTP requests.
+    The timeout parameter in litellm.completion() does NOT update the httpx client's
+    read/write timeout, only affects API-level retries.
+
+    This function monkey-patches the _DEFAULT_TIMEOUT module variable before any
+    HTTPHandler instances are created, ensuring all HTTP clients use the correct timeout.
+
+    Args:
+        timeout_seconds: Timeout in seconds for read/write operations
+    """
+    import litellm.llms.custom_httpx.http_handler as http_handler_module
+
+    http_handler_module._DEFAULT_TIMEOUT = httpx.Timeout(
+        connect=30.0,  # Connection establishment timeout
+        read=float(timeout_seconds),  # Response read timeout
+        write=float(timeout_seconds),  # Request write timeout
+        pool=5.0  # Connection pool timeout
+    )
+    logger.debug(f"Patched litellm _DEFAULT_TIMEOUT to: {http_handler_module._DEFAULT_TIMEOUT}")
+
+
+def _build_spatial_prompt(template: str, semantic_data: List[Dict[str, Any]]) -> str:
+    """
+    Inject n_steps and parts list into spatial prompt template.
+
+    Args:
+        template: Spatial prompt template from step_spatial.txt
+        semantic_data: List of step dicts with parts_required
+
+    Returns:
+        Populated prompt string
+    """
+    n_steps = len(semantic_data)
+
+    # Build parts list section
+    parts_lines = ["PARTS BY STEP:"]
+    for i, sem in enumerate(semantic_data):
+        parts = sem.get("parts_required", [])
+        if parts:
+            part_descs = [f'"{p.get("description", "")}"' for p in parts]
+            parts_lines.append(f"Step {i}: {', '.join(part_descs)}")
+        else:
+            parts_lines.append(f"Step {i}: (no parts)")
+
+    parts_list = "\n".join(parts_lines)
+
+    # Replace both placeholders
+    prompt = template.replace("{n_steps}", str(n_steps))
+    prompt = prompt.replace("{parts_list}", parts_list)
+
+    return prompt
 
 
 # ── main class ───────────────────────────────────────────────────────────────
@@ -103,17 +156,23 @@ class VLMExtractor:
         vlm_model: str,
         api_key: str,
         max_retries: int = 3,
+        timeout: int = 60,
         spatial_prompt_template: str = "",
     ):
         self.litellm_model = vlm_model
         # google-genai uses bare model name without the "gemini/" litellm prefix
         self.genai_model = vlm_model.split("/", 1)[-1]
         self.max_retries = max_retries
+        self.timeout = timeout
         self.spatial_prompt_template = spatial_prompt_template
         self.genai_client = genai.Client(api_key=api_key)
         os.environ["GEMINI_API_KEY"] = api_key
+
+        # Configure litellm
         litellm.drop_params = True
-        logger.info(f"VLMExtractor ready — semantic: {self.litellm_model} | spatial: {self.genai_model}")
+        _patch_litellm_timeout(self.timeout)
+
+        logger.info(f"VLMExtractor ready — semantic: {self.litellm_model} | spatial: {self.genai_model} | timeout: {self.timeout}s")
 
     # ── public ───────────────────────────────────────────────────────────────
 
@@ -174,9 +233,9 @@ class VLMExtractor:
         if n_steps == 0:
             return []
 
-        # ── Call 2: Spatial ───────────────────────────────────────────────
-        logger.debug("  Call 2 — spatial")
-        spatial_prompt = _build_spatial_prompt(self.spatial_prompt_template, n_steps)
+        # ── Call 2: Enhanced Spatial (includes individual parts) ──────────
+        logger.debug("  Call 2 — enhanced spatial")
+        spatial_prompt = _build_spatial_prompt(self.spatial_prompt_template, semantic_data)
         spatial_data = self._spatial_call(img_resized, spatial_prompt)
         logger.debug(f"  Spatial returned {len(spatial_data)} box(es)")
 
@@ -226,7 +285,15 @@ class VLMExtractor:
                         thinking_config=types.ThinkingConfig(thinking_budget=0),
                     ),
                 )
-                result = _parse_json(response.text)
+                # response.text concatenates ALL parts including thinking tokens.
+                # Extract only non-thinking parts to avoid passing reasoning text
+                # into the JSON parser.
+                parts = response.candidates[0].content.parts
+                response_text = "".join(
+                    p.text for p in parts
+                    if not getattr(p, "thought", False) and getattr(p, "text", None)
+                )
+                result = _parse_json(response_text)
                 return result if isinstance(result, list) else [result]
 
             except Exception as e:
@@ -245,19 +312,43 @@ class VLMExtractor:
 
     # ── litellm retry wrapper ─────────────────────────────────────────────────
 
-    def _litellm_with_retry(self, messages: List[Dict]) -> str:
+    def _litellm_with_retry(self, messages: List[Dict], timeout: Optional[int] = None) -> str:
+        """
+        Call litellm with retry logic.
+
+        Args:
+            messages: List of message dicts for the VLM
+            timeout: Optional timeout in seconds. If None, uses self.timeout.
+                     Note: The httpx client timeout is configured via _DEFAULT_TIMEOUT monkey-patch in __init__.
+        """
         retry_delay = 2
+        effective_timeout = timeout if timeout is not None else self.timeout
+
         for attempt in range(self.max_retries):
             try:
                 response = litellm.completion(
                     model=self.litellm_model,
                     messages=messages,
                     temperature=0.5,
-                    max_tokens=4096,
+                    max_tokens=65535,
+                    timeout=effective_timeout,
                 )
-                text = response.choices[0].message.content
+                msg = response.choices[0].message
+                text = msg.content
                 if text is None:
-                    raise ValueError("VLM returned None content")
+                    finish_reason = response.choices[0].finish_reason
+                    extra_fields = {k: v for k, v in vars(msg).items() if v is not None and k != "content"}
+                    logger.warning(
+                        f"  content=None | finish_reason={finish_reason} | "
+                        f"other fields: {list(extra_fields.keys())} | "
+                        f"usage={response.usage}"
+                    )
+                    if attempt < self.max_retries - 1:
+                        wait = retry_delay * (2 ** attempt)
+                        logger.warning(f"  Semantic call returned None content, retry in {wait}s")
+                        time.sleep(wait)
+                        continue
+                    raise ValueError("VLM returned None content after all retries")
                 return text
             except Exception as e:
                 err = str(e).lower()
@@ -283,11 +374,12 @@ class VLMExtractor:
         """
         Merge semantic text with spatial bounding boxes.
 
-        Semantic steps are in page order (index 0, 1, …).
-        Spatial boxes use labels "parts_0", "subassembly_0", "parts_1", … to
-        identify which step they belong to.
+        Spatial boxes now include:
+        - "parts_panel_X" - entire parts panel for step X (optional, for reference)
+        - "subassembly_X" - subassembly for step X
+        - "step_X_part_Y" - individual part Y in step X
         """
-        # Index spatial boxes by (type, step_index)
+        # Index spatial boxes by label
         boxes: Dict[str, List[int]] = {}
         for item in spatial_data:
             label = item.get("label", "")
@@ -297,17 +389,23 @@ class VLMExtractor:
 
         steps: List[Step] = []
         for i, sem in enumerate(semantic_data):
-            # Parts: one PartInfo per described part, all sharing the panel bbox
-            parts_bbox = boxes.get(f"parts_{i}")
-            bbox_parts = _box2d_to_bbox(parts_bbox, orig_w, orig_h) if parts_bbox else None
+            # Build parts list with individual boxes
+            parts = []
+            for j, p in enumerate(sem.get("parts_required", [])):
+                desc = p.get("description", "")
 
-            parts = [
-                PartInfo(
-                    description=p.get("description", ""),
-                    bounding_box=bbox_parts,
-                )
-                for p in sem.get("parts_required", [])
-            ]
+                # Try to get individual part box first
+                part_label = f"step_{i}_part_{j}"
+                part_bbox = boxes.get(part_label)
+
+                if part_bbox:
+                    # Individual part detected
+                    bbox = _box2d_to_bbox(part_bbox, orig_w, orig_h)
+                else:
+                    # Fallback: no individual box detected, set to None (no image)
+                    bbox = None
+
+                parts.append(PartInfo(description=desc, bounding_box=bbox))
 
             # Subassembly: one entry per step
             sub_bbox = boxes.get(f"subassembly_{i}")
