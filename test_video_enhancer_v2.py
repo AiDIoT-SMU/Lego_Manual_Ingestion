@@ -85,7 +85,7 @@ async def main():
     # Test parameters
     manual_id = "111111"
     video_id = "changi_airport"
-    max_frames = 500  # Limit to first 500 frames for testing (None = entire video)
+    max_frames = 1000  # Limit to first 1000 frames for testing (None = entire video)
 
     # Initialize settings
     settings = get_settings()

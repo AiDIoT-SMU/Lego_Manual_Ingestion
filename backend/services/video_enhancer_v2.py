@@ -222,6 +222,13 @@ class VideoEnhancerV2:
             else self._get_default_placement_reconciliation_prompt()
         )
 
+        action_frame_analysis_path = prompts_dir / "video_action_frame_analysis.txt"
+        self.action_frame_analysis_template = (
+            action_frame_analysis_path.read_text()
+            if action_frame_analysis_path.exists()
+            else self._get_default_action_frame_analysis_prompt()
+        )
+
         # Initialize quality filter and subassembly tracker
         self.quality_filter = VideoQualityFilter(
             blur_threshold=100.0,
@@ -276,7 +283,7 @@ class VideoEnhancerV2:
         # === VLM PASS 2: Context-Aware Placement Validation ===
         logger.info("VLM Pass 2: Validating placements with manual context...")
         validated_placements = await self._validate_placements_with_context(
-            placement_candidates, manual_data, manual_id, video_id
+            placement_candidates, classified_frames, manual_data, manual_id, video_id
         )
         logger.info(f"Pass 2 complete: {len(validated_placements)} unique validated placements")
 
@@ -634,11 +641,82 @@ class VideoEnhancerV2:
 
         return result
 
+    # ── VLM Pass 2a: Action Frame Analysis (Sub-call within Pass 2) ──────────
+
+    def _analyze_action_frames(
+        self,
+        action_frames: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        VLM Pass 2a: Analyze action frames to identify what part is being manipulated.
+
+        This is called WITHIN Pass 2 for each placement candidate, to determine if the
+        part being touched is new (pickup) or already placed (adjustment).
+
+        Args:
+            action_frames: List of action frame metadata between two placement frames
+
+        Returns:
+            {
+                "part_being_manipulated": str,
+                "color": str,
+                "part_type": str,
+                "size": str,
+                "action_type": "pickup" or "adjustment",
+                "confidence": float,
+                "reasoning": str
+            }
+            or None if analysis fails
+        """
+        if not action_frames:
+            return None
+
+        try:
+            # Build content with all action frame images
+            content = []
+            content.append({
+                "type": "text",
+                "text": f"Analyzing {len(action_frames)} action frames in sequence:"
+            })
+
+            for idx, frame_data in enumerate(action_frames, 1):
+                frame_path = frame_data.get("frame_path")
+                frame_num = frame_data.get("frame_number")
+                if frame_path:
+                    frame_img = _resize_image(str(frame_path), width=800)
+                    frame_b64 = _image_to_b64(frame_img)
+                    content.append({
+                        "type": "text",
+                        "text": f"Action Frame {idx}/{len(action_frames)} (Frame #{frame_num}):"
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{frame_b64}"}
+                    })
+
+            # Add prompt
+            content.append({
+                "type": "text",
+                "text": self.action_frame_analysis_template
+            })
+
+            # Make VLM call
+            messages = [{"role": "user", "content": content}]
+            raw = self.vlm._litellm_with_retry(messages)
+            result = _parse_json(raw)
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"Action frame analysis failed: {e}")
+            return None
+
     # ── VLM Pass 2: Context-Aware Placement Validation ───────────────────────
 
     async def _validate_placements_with_context(
         self,
         placement_candidates: List[Dict[str, Any]],
+        all_classified_frames: List[Dict[str, Any]],
         manual_data: Dict[str, Any],
         manual_id: str,
         video_id: str,
@@ -647,13 +725,37 @@ class VideoEnhancerV2:
         VLM Pass 2: Validate placement candidates using context from enhanced.json.
 
         For each candidate frame:
+        - Analyze action frames between placements (Pass 2a sub-call) to identify parts being manipulated
         - Compare against the LAST ACCEPTED placement (not just the preceding candidate)
         - Detect what new part was added using pure visual comparison
         - Check for duplicates using mask-based object tracking (IoU comparison)
         - Track subassembly switches
+
+        Args:
+            placement_candidates: Frames classified as placement candidates
+            all_classified_frames: ALL classified frames (including action frames)
+            manual_data: Enhanced.json data
+            manual_id: Manual identifier
+            video_id: Video identifier
         """
         if not placement_candidates:
             return []
+
+        # Initialize detailed reasoning log file
+        comparison_log_dir = self.settings.data_dir / "processed" / manual_id / f"vlm_reasoning_logs_{video_id}"
+        comparison_log_dir.mkdir(parents=True, exist_ok=True)
+        comparison_log_path = comparison_log_dir / "placement_reasoning.log"
+
+        # Clear/create new log file at the start
+        with open(comparison_log_path, "w", encoding="utf-8") as log_file:
+            log_file.write("=" * 100 + "\n")
+            log_file.write("VLM PLACEMENT REASONING LOG\n")
+            log_file.write(f"Manual ID: {manual_id}\n")
+            log_file.write(f"Video ID: {video_id}\n")
+            log_file.write(f"Total placement candidates: {len(placement_candidates)}\n")
+            log_file.write("=" * 100 + "\n\n")
+
+        logger.info(f"  Detailed VLM reasoning log will be written to: {comparison_log_path}")
 
         # Build step-indexed parts list from manual
         parts_by_step = self._build_parts_by_step(manual_data)
@@ -722,74 +824,112 @@ class VideoEnhancerV2:
                 current_annotated_path = None
                 current_masks = []
 
-                # === YOLO-WORLD + SAM3 OBJECT DETECTION ===
-                if lego_query:
-                    import cv2
-                    img = cv2.imread(str(current_frame["frame_path"]))
-                    if img is not None:
-                        img_h, img_w = img.shape[:2]
-                        try:
-                            detections = detect_objects_yolo_world_sam3(
-                                str(current_frame["frame_path"]),
-                                lego_query,
-                                self.settings.roboflow_api_key,
-                                (img_h, img_w)
-                            )
+                # === YOLO-WORLD + SAM3 OBJECT DETECTION === (TEMPORARILY DISABLED FOR VLM-ONLY TESTING)
+                # if lego_query:
+                #     import cv2
+                #     img = cv2.imread(str(current_frame["frame_path"]))
+                #     if img is not None:
+                #         img_h, img_w = img.shape[:2]
+                #         try:
+                #             detections = detect_objects_yolo_world_sam3(
+                #                 str(current_frame["frame_path"]),
+                #                 lego_query,
+                #                 self.settings.roboflow_api_key,
+                #                 (img_h, img_w)
+                #             )
+                #
+                #             if detections:
+                #                 # Extract masks for object tracking (ignore labels for now)
+                #                 current_masks = [obj["mask"] for obj in detections if obj.get("mask") is not None]
+                #
+                #                 # Check if any NEW objects were detected using mask IoU comparison
+                #                 new_mask_indices = find_new_masks(current_masks, previous_masks, iou_threshold=0.3)
+                #
+                #                 if not new_mask_indices and previous_masks:
+                #                     logger.info(
+                #                         f"  Placement {i} (frame {frame_num}): "
+                #                         f"No new objects detected via mask tracking (all {len(current_masks)} masks match previous) - skipping VLM call"
+                #                     )
+                #                     continue
+                #                 elif new_mask_indices:
+                #                     logger.debug(
+                #                         f"  Frame {frame_num}: Detected {len(new_mask_indices)} new masks out of {len(current_masks)} total"
+                #                     )
+                #
+                #                 # Group by label and count
+                #                 label_counts = {}
+                #                 label_data = {}
+                #                 for obj in detections:
+                #                     label = obj["label"]
+                #                     if label not in label_counts:
+                #                         label_counts[label] = 0
+                #                         label_data[label] = obj
+                #                     label_counts[label] += 1
+                #
+                #                 # Build grouped detections with counts
+                #                 grouped_detections = []
+                #                 for label, count in label_counts.items():
+                #                     obj = label_data[label].copy()
+                #                     obj["count"] = count
+                #                     grouped_detections.append(obj)
+                #
+                #                 current_detections = grouped_detections
+                #
+                #                 # Annotate frame
+                #                 annotated_dir = (
+                #                     self.settings.data_dir / "processed" / manual_id
+                #                     / f"yolo_world_sam3_annotated_{video_id}"
+                #                 )
+                #                 annotated_dir.mkdir(parents=True, exist_ok=True)
+                #
+                #                 annotated_path = annotated_dir / f"frame_{frame_num:04d}.jpg"
+                #                 annotate_frame_with_objects(
+                #                     Path(current_frame["frame_path"]),
+                #                     grouped_detections,
+                #                     annotated_path,
+                #                     previous_placements=None
+                #                 )
+                #                 current_annotated_path = annotated_path
+                #         except Exception as e:
+                #             logger.warning(f"YOLO-World + SAM3 detection failed for frame {frame_num}: {e}")
 
-                            if detections:
-                                # Extract masks for object tracking (ignore labels for now)
-                                current_masks = [obj["mask"] for obj in detections if obj.get("mask") is not None]
+                # === VLM PASS 2a: Analyze action frames between placements ===
+                action_frame_analysis = None
+                action_frames_between = []
 
-                                # Check if any NEW objects were detected using mask IoU comparison
-                                new_mask_indices = find_new_masks(current_masks, previous_masks, iou_threshold=0.3)
+                if last_accepted_candidate is not None:
+                    # Get the frame numbers
+                    prev_placement_frame_num = last_accepted_candidate.get("frame_number")
+                    current_placement_frame_num = frame_num
 
-                                if not new_mask_indices and previous_masks:
-                                    logger.info(
-                                        f"  Placement {i} (frame {frame_num}): "
-                                        f"No new objects detected via mask tracking (all {len(current_masks)} masks match previous) - skipping VLM call"
-                                    )
-                                    continue
-                                elif new_mask_indices:
-                                    logger.debug(
-                                        f"  Frame {frame_num}: Detected {len(new_mask_indices)} new masks out of {len(current_masks)} total"
-                                    )
+                    # Find action frames between the two placements
+                    for frame in all_classified_frames:
+                        f_num = frame.get("frame_number")
+                        f_type = frame.get("frame_type")
 
-                                # Group by label and count
-                                label_counts = {}
-                                label_data = {}
-                                for obj in detections:
-                                    label = obj["label"]
-                                    if label not in label_counts:
-                                        label_counts[label] = 0
-                                        label_data[label] = obj
-                                    label_counts[label] += 1
+                        # Action frame that's between the two placements
+                        if (f_type == "action" and
+                            f_num > prev_placement_frame_num and
+                            f_num < current_placement_frame_num):
+                            action_frames_between.append(frame)
 
-                                # Build grouped detections with counts
-                                grouped_detections = []
-                                for label, count in label_counts.items():
-                                    obj = label_data[label].copy()
-                                    obj["count"] = count
-                                    grouped_detections.append(obj)
+                    # If no action frames between placements, likely a duplicate
+                    if not action_frames_between:
+                        logger.info(
+                            f"  Placement {i} (frame {frame_num}): "
+                            f"No action frames between prev frame {prev_placement_frame_num} and current - likely duplicate, skipping VLM call"
+                        )
+                        continue
 
-                                current_detections = grouped_detections
+                    # Analyze action frames to identify what part is being manipulated
+                    logger.debug(f"  Frame {frame_num}: Analyzing {len(action_frames_between)} action frames between placements")
+                    action_frame_analysis = self._analyze_action_frames(action_frames_between)
 
-                                # Annotate frame
-                                annotated_dir = (
-                                    self.settings.data_dir / "processed" / manual_id
-                                    / f"yolo_world_sam3_annotated_{video_id}"
-                                )
-                                annotated_dir.mkdir(parents=True, exist_ok=True)
-
-                                annotated_path = annotated_dir / f"frame_{frame_num:04d}.jpg"
-                                annotate_frame_with_objects(
-                                    Path(current_frame["frame_path"]),
-                                    grouped_detections,
-                                    annotated_path,
-                                    previous_placements=None
-                                )
-                                current_annotated_path = annotated_path
-                        except Exception as e:
-                            logger.warning(f"YOLO-World + SAM3 detection failed for frame {frame_num}: {e}")
+                    if action_frame_analysis:
+                        logger.debug(
+                            f"  Action frame analysis: {action_frame_analysis.get('part_being_manipulated')} "
+                            f"({action_frame_analysis.get('action_type')})"
+                        )
 
                 # Build object count summary
                 object_count_summary = ""
@@ -809,6 +949,24 @@ class VideoEnhancerV2:
                         previous_placement_context += f"{idx}. {placement.get('action_description', 'N/A')}\n"
                     previous_placement_context += "\nIf current frame shows the SAME total number of objects as expected from previous placements, then NO new part was added.\n\n"
 
+                # Build action frame context
+                action_frame_context = ""
+                if action_frame_analysis:
+                    action_type = action_frame_analysis.get('action_type', 'unknown')
+                    part_desc = action_frame_analysis.get('part_being_manipulated', 'unknown part')
+                    reasoning = action_frame_analysis.get('reasoning', '')
+
+                    action_frame_context = f"**ACTION FRAMES BETWEEN PLACEMENTS ({len(action_frames_between)} frames analyzed):**\n"
+                    action_frame_context += f"Part being manipulated: {part_desc}\n"
+                    action_frame_context += f"Action type: {action_type.upper()}\n"
+
+                    if action_type == "adjustment":
+                        action_frame_context += f"Note: This part ({part_desc}) was already placed and is being adjusted.\n"
+                    elif action_type == "pickup":
+                        action_frame_context += f"Note: This part ({part_desc}) is being picked up for a new placement.\n"
+
+                    action_frame_context += f"Reasoning: {reasoning}\n\n"
+
                 # Use annotated frame if available
                 current_img_path = current_annotated_path if current_annotated_path else current_frame["frame_path"]
                 current_img = _resize_image(str(current_img_path), width=800)
@@ -817,6 +975,7 @@ class VideoEnhancerV2:
                 # Build prompt with context
                 prompt_with_context = (
                     previous_placement_context +
+                    action_frame_context +
                     object_count_summary +
                     self.placement_validation_template
                 )
@@ -854,6 +1013,77 @@ class VideoEnhancerV2:
                 has_new_part = result.get("has_new_part", False)
                 is_duplicate = result.get("is_duplicate_of_previous", False)
                 confidence = result.get("confidence", 0.0)
+
+                # === DETAILED LOGGING FOR VLM REASONING ===
+                # Write detailed comparison log to file
+                comparison_log_dir = self.settings.data_dir / "processed" / manual_id / f"vlm_reasoning_logs_{video_id}"
+                comparison_log_dir.mkdir(parents=True, exist_ok=True)
+                comparison_log_path = comparison_log_dir / "placement_reasoning.log"
+
+                with open(comparison_log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write("=" * 100 + "\n")
+                    log_file.write(f"PLACEMENT CANDIDATE {i} - Frame {frame_num} (timestamp: {timestamp:.2f}s)\n")
+                    log_file.write("=" * 100 + "\n\n")
+
+                    # Previous frame info
+                    if i == 0:
+                        log_file.write("PREVIOUS FRAME: None (this is the first placement)\n\n")
+                    else:
+                        prev_frame = last_accepted_candidate if last_accepted_candidate is not None else placement_candidates[i - 1]
+                        prev_frame_num = prev_frame.get("frame_number", "?")
+                        prev_timestamp = prev_frame.get("timestamp", 0.0)
+                        log_file.write(f"PREVIOUS FRAME: Frame {prev_frame_num} (timestamp: {prev_timestamp:.2f}s)\n")
+                        log_file.write(f"  Path: {prev_frame.get('frame_path', 'N/A')}\n\n")
+
+                    # Previous placement (most recent only)
+                    log_file.write("PREVIOUS PLACEMENT CONTEXT:\n")
+                    if validated_placements:
+                        last_placement = validated_placements[-1]
+                        log_file.write(f"  Frame {last_placement.get('frame_number')}: {last_placement.get('action_description', 'N/A')}\n")
+                    else:
+                        log_file.write("  (No previous placements)\n")
+                    log_file.write("\n")
+
+                    # Action frame analysis (VLM Pass 2a)
+                    log_file.write(f"ACTION FRAMES BETWEEN PLACEMENTS: {len(action_frames_between)} frames\n")
+                    if action_frames_between:
+                        log_file.write(f"  Frame numbers: {[f.get('frame_number') for f in action_frames_between]}\n")
+                    if action_frame_analysis:
+                        log_file.write("VLM PASS 2a - ACTION FRAME ANALYSIS:\n")
+                        log_file.write(f"  part_being_manipulated: {action_frame_analysis.get('part_being_manipulated', 'N/A')}\n")
+                        log_file.write(f"  color: {action_frame_analysis.get('color', 'N/A')}\n")
+                        log_file.write(f"  part_type: {action_frame_analysis.get('part_type', 'N/A')}\n")
+                        log_file.write(f"  size: {action_frame_analysis.get('size', 'N/A')}\n")
+                        log_file.write(f"  action_type: {action_frame_analysis.get('action_type', 'N/A').upper()}\n")
+                        log_file.write(f"  confidence: {action_frame_analysis.get('confidence', 0.0):.2f}\n")
+                        log_file.write(f"  reasoning: {action_frame_analysis.get('reasoning', 'N/A')}\n")
+                    else:
+                        log_file.write("  (No action frame analysis)\n")
+                    log_file.write("\n")
+
+                    # Current frame info
+                    log_file.write(f"CURRENT FRAME: Frame {frame_num} (timestamp: {timestamp:.2f}s)\n")
+                    log_file.write(f"  Path: {current_frame.get('frame_path', 'N/A')}\n\n")
+
+                    # VLM Decision
+                    log_file.write("VLM PASS 2b - PLACEMENT VALIDATION DECISION:\n")
+                    log_file.write(f"  has_new_part: {has_new_part}\n")
+                    log_file.write(f"  is_duplicate_of_previous: {is_duplicate}\n")
+                    log_file.write(f"  confidence: {confidence:.2f}\n")
+                    log_file.write(f"  action_description: {result.get('action_description', 'N/A')}\n")
+                    log_file.write(f"  new_parts_added: {result.get('new_parts_added', [])}\n")
+                    log_file.write(f"  reasoning: {result.get('reasoning', 'N/A')}\n")
+                    log_file.write(f"  visual_difference: {result.get('visual_difference', 'N/A')}\n\n")
+
+                    # Final verdict
+                    if is_duplicate or not has_new_part:
+                        log_file.write("VERDICT: REJECTED (duplicate or no new part)\n")
+                    elif confidence < getattr(self.settings, "placement_min_confidence", 0.6):
+                        log_file.write(f"VERDICT: REJECTED (low confidence: {confidence:.2f})\n")
+                    else:
+                        log_file.write("VERDICT: ACCEPTED\n")
+
+                    log_file.write("\n\n")
 
                 if is_duplicate or not has_new_part:
                     logger.info(
@@ -1505,3 +1735,6 @@ class VideoEnhancerV2:
 
     def _get_default_placement_reconciliation_prompt(self) -> str:
         return "Reconcile placement against expected parts. Return JSON with verified, matched_part, video_detection_correct, correction, and reasoning fields."
+
+    def _get_default_action_frame_analysis_prompt(self) -> str:
+        return "Analyze action frames to identify what LEGO part is being manipulated. Return JSON with part_being_manipulated, color, part_type, size, action_type (pickup/adjustment), confidence, and reasoning."

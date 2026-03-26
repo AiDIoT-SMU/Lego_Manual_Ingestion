@@ -23,6 +23,7 @@ from pathlib import Path
 from loguru import logger
 
 import litellm
+import httpx
 from PIL import Image as PILImage
 from google import genai
 from google.genai import types
@@ -79,6 +80,31 @@ def _image_to_b64(img: PILImage.Image, mime: str = "image/png") -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def _patch_litellm_timeout(timeout_seconds: int) -> None:
+    """
+    Patch litellm's default HTTP timeout.
+
+    litellm uses a hard-coded _DEFAULT_TIMEOUT of 5 seconds for all HTTP requests.
+    The timeout parameter in litellm.completion() does NOT update the httpx client's
+    read/write timeout, only affects API-level retries.
+
+    This function monkey-patches the _DEFAULT_TIMEOUT module variable before any
+    HTTPHandler instances are created, ensuring all HTTP clients use the correct timeout.
+
+    Args:
+        timeout_seconds: Timeout in seconds for read/write operations
+    """
+    import litellm.llms.custom_httpx.http_handler as http_handler_module
+
+    http_handler_module._DEFAULT_TIMEOUT = httpx.Timeout(
+        connect=30.0,  # Connection establishment timeout
+        read=float(timeout_seconds),  # Response read timeout
+        write=float(timeout_seconds),  # Request write timeout
+        pool=5.0  # Connection pool timeout
+    )
+    logger.debug(f"Patched litellm _DEFAULT_TIMEOUT to: {http_handler_module._DEFAULT_TIMEOUT}")
 
 
 def _build_spatial_prompt(template: str, semantic_data: List[Dict[str, Any]]) -> str:
@@ -141,7 +167,11 @@ class VLMExtractor:
         self.spatial_prompt_template = spatial_prompt_template
         self.genai_client = genai.Client(api_key=api_key)
         os.environ["GEMINI_API_KEY"] = api_key
+
+        # Configure litellm
         litellm.drop_params = True
+        _patch_litellm_timeout(self.timeout)
+
         logger.info(f"VLMExtractor ready — semantic: {self.litellm_model} | spatial: {self.genai_model} | timeout: {self.timeout}s")
 
     # ── public ───────────────────────────────────────────────────────────────
@@ -282,8 +312,18 @@ class VLMExtractor:
 
     # ── litellm retry wrapper ─────────────────────────────────────────────────
 
-    def _litellm_with_retry(self, messages: List[Dict]) -> str:
+    def _litellm_with_retry(self, messages: List[Dict], timeout: Optional[int] = None) -> str:
+        """
+        Call litellm with retry logic.
+
+        Args:
+            messages: List of message dicts for the VLM
+            timeout: Optional timeout in seconds. If None, uses self.timeout.
+                     Note: The httpx client timeout is configured via _DEFAULT_TIMEOUT monkey-patch in __init__.
+        """
         retry_delay = 2
+        effective_timeout = timeout if timeout is not None else self.timeout
+
         for attempt in range(self.max_retries):
             try:
                 response = litellm.completion(
@@ -291,7 +331,7 @@ class VLMExtractor:
                     messages=messages,
                     temperature=0.5,
                     max_tokens=65535,
-                    timeout=self.timeout,
+                    timeout=effective_timeout,
                 )
                 msg = response.choices[0].message
                 text = msg.content
