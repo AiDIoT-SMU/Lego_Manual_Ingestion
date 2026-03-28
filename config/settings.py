@@ -19,9 +19,6 @@ class Settings(BaseSettings):
     frame_classification_batch_size: int = 8  # frames per VLM call in video enhancement
     placement_min_confidence: float = 0.6  # minimum VLM confidence to accept a detected placement
 
-    # Roboflow API Configuration (for Grounding DINO + SAM3)
-    roboflow_api_key: str
-
     # Paths (relative to project root)
     data_dir: Path = Path("./data")
     manual_dir: Path = Path("./data/manuals")

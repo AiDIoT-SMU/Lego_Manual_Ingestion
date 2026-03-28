@@ -11,7 +11,6 @@ Four VLM call pipeline:
 import io
 import base64
 import json
-import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -22,12 +21,6 @@ from ingestion.vlm_extractor import VLMExtractor, _parse_json, _box2d_to_bbox
 from backend.services.data_service import DataService
 from backend.services.video_quality_filter import VideoQualityFilter
 from backend.services.video_state_tracker import SubassemblyTracker
-from backend.services.yolo_world_sam3_detector import (
-    detect_objects_yolo_world_sam3,
-    annotate_frame_with_objects,
-    get_generic_lego_query,
-    find_new_masks
-)
 from config.settings import Settings
 
 
@@ -762,10 +755,6 @@ class VideoEnhancerV2:
         current_step = 1  # Start at step 1
         parts_used_in_current_step = 0
 
-        # Use generic LEGO query for YOLO-World + SAM3 detection
-        lego_query = get_generic_lego_query()
-        logger.info(f"  Using generic LEGO query for YOLO-World + SAM3: '{lego_query}'")
-
         # Load cache
         cache_path = (
             self.settings.data_dir / "processed" / manual_id
@@ -791,8 +780,6 @@ class VideoEnhancerV2:
         new_calls = 0
         # Tracks the last placement_candidate dict that was accepted into validated_placements
         last_accepted_candidate: Optional[Dict[str, Any]] = None
-        # Track masks from previous accepted placement for object-level duplicate detection
-        previous_masks: List[np.ndarray] = []
 
         for i, current_frame in enumerate(placement_candidates):
             frame_num = current_frame["frame_number"]
@@ -819,80 +806,6 @@ class VideoEnhancerV2:
                 continue
 
             try:
-                # Initialize variables that will be used later
-                current_detections = []
-                current_annotated_path = None
-                current_masks = []
-
-                # === YOLO-WORLD + SAM3 OBJECT DETECTION === (TEMPORARILY DISABLED FOR VLM-ONLY TESTING)
-                # if lego_query:
-                #     import cv2
-                #     img = cv2.imread(str(current_frame["frame_path"]))
-                #     if img is not None:
-                #         img_h, img_w = img.shape[:2]
-                #         try:
-                #             detections = detect_objects_yolo_world_sam3(
-                #                 str(current_frame["frame_path"]),
-                #                 lego_query,
-                #                 self.settings.roboflow_api_key,
-                #                 (img_h, img_w)
-                #             )
-                #
-                #             if detections:
-                #                 # Extract masks for object tracking (ignore labels for now)
-                #                 current_masks = [obj["mask"] for obj in detections if obj.get("mask") is not None]
-                #
-                #                 # Check if any NEW objects were detected using mask IoU comparison
-                #                 new_mask_indices = find_new_masks(current_masks, previous_masks, iou_threshold=0.3)
-                #
-                #                 if not new_mask_indices and previous_masks:
-                #                     logger.info(
-                #                         f"  Placement {i} (frame {frame_num}): "
-                #                         f"No new objects detected via mask tracking (all {len(current_masks)} masks match previous) - skipping VLM call"
-                #                     )
-                #                     continue
-                #                 elif new_mask_indices:
-                #                     logger.debug(
-                #                         f"  Frame {frame_num}: Detected {len(new_mask_indices)} new masks out of {len(current_masks)} total"
-                #                     )
-                #
-                #                 # Group by label and count
-                #                 label_counts = {}
-                #                 label_data = {}
-                #                 for obj in detections:
-                #                     label = obj["label"]
-                #                     if label not in label_counts:
-                #                         label_counts[label] = 0
-                #                         label_data[label] = obj
-                #                     label_counts[label] += 1
-                #
-                #                 # Build grouped detections with counts
-                #                 grouped_detections = []
-                #                 for label, count in label_counts.items():
-                #                     obj = label_data[label].copy()
-                #                     obj["count"] = count
-                #                     grouped_detections.append(obj)
-                #
-                #                 current_detections = grouped_detections
-                #
-                #                 # Annotate frame
-                #                 annotated_dir = (
-                #                     self.settings.data_dir / "processed" / manual_id
-                #                     / f"yolo_world_sam3_annotated_{video_id}"
-                #                 )
-                #                 annotated_dir.mkdir(parents=True, exist_ok=True)
-                #
-                #                 annotated_path = annotated_dir / f"frame_{frame_num:04d}.jpg"
-                #                 annotate_frame_with_objects(
-                #                     Path(current_frame["frame_path"]),
-                #                     grouped_detections,
-                #                     annotated_path,
-                #                     previous_placements=None
-                #                 )
-                #                 current_annotated_path = annotated_path
-                #         except Exception as e:
-                #             logger.warning(f"YOLO-World + SAM3 detection failed for frame {frame_num}: {e}")
-
                 # === VLM PASS 2a: Analyze action frames between placements ===
                 action_frame_analysis = None
                 action_frames_between = []
@@ -931,15 +844,6 @@ class VideoEnhancerV2:
                             f"({action_frame_analysis.get('action_type')})"
                         )
 
-                # Build object count summary
-                object_count_summary = ""
-                if current_detections:
-                    total_objects = sum(obj['count'] for obj in current_detections)
-                    object_count_summary = f"**CURRENT FRAME OBJECT COUNTS (YOLO-World detected {total_objects} total LEGO parts):**\n"
-                    for obj in current_detections:
-                        object_count_summary += f"- {obj['label']}: {obj['count']} detected\n"
-                    object_count_summary += "\n"
-
                 # Build previous placement context
                 previous_placement_context = ""
                 if validated_placements:
@@ -967,16 +871,14 @@ class VideoEnhancerV2:
 
                     action_frame_context += f"Reasoning: {reasoning}\n\n"
 
-                # Use annotated frame if available
-                current_img_path = current_annotated_path if current_annotated_path else current_frame["frame_path"]
-                current_img = _resize_image(str(current_img_path), width=800)
+                # Use frame for VLM analysis
+                current_img = _resize_image(str(current_frame["frame_path"]), width=800)
                 current_b64 = _image_to_b64(current_img)
 
                 # Build prompt with context
                 prompt_with_context = (
                     previous_placement_context +
                     action_frame_context +
-                    object_count_summary +
                     self.placement_validation_template
                 )
 
@@ -996,11 +898,10 @@ class VideoEnhancerV2:
                     prev_b64 = _image_to_b64(prev_img)
                     prev_frame_num = prev_frame.get("frame_number", "?")
 
-                    frame_annotation_note = " — with YOLO-World + SAM3 annotations" if current_annotated_path else ""
                     content = [
                         {"type": "text", "text": f"PREVIOUS PLACEMENT FRAME (frame {prev_frame_num} — last accepted placement):"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{prev_b64}"}},
-                        {"type": "text", "text": f"CURRENT PLACEMENT FRAME (frame {frame_num}){frame_annotation_note}:"},
+                        {"type": "text", "text": f"CURRENT PLACEMENT FRAME (frame {frame_num}):"},
                         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
                         {"type": "text", "text": prompt_with_context}
                     ]
@@ -1139,8 +1040,6 @@ class VideoEnhancerV2:
                         "spatial_position": result.get("spatial_position", {}),
                         "box_2d": box_2d,
                         "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
-                        "yolo_world_sam3_annotated_path": str(current_annotated_path.relative_to(self.settings.data_dir)) if current_annotated_path else None,
-                        "yolo_world_detections": [{"label": d["label"], "count": d["count"], "bbox": d["bbox"]} for d in current_detections] if current_detections else [],
                         "is_subassembly_switch": is_subassembly_switch,
                         "current_subassembly": self.subassembly_tracker.get_current_subassembly(),
                         "manual_step": current_step,
@@ -1148,11 +1047,6 @@ class VideoEnhancerV2:
                     }
                     validated_placements.append(action_data)
                     last_accepted_candidate = current_frame
-
-                    # Update mask tracking for next frame comparison
-                    if current_masks:
-                        previous_masks = current_masks.copy()
-                        logger.debug(f"  Updated previous_masks with {len(previous_masks)} masks from frame {frame_num}")
 
                     # Track parts usage and advance step if needed
                     parts_used_in_current_step += 1
