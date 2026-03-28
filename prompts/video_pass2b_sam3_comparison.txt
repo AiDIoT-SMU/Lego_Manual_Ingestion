@@ -1,0 +1,142 @@
+You are analyzing SAM3-segmented LEGO assembly images to identify what changed between them.
+
+**INPUTS:**
+1. PREVIOUS PLACEMENT (SAM3 segmented): Assembly cropped on white background (may be None for first placement)
+2. CURRENT PLACEMENT (SAM3 segmented): Assembly cropped on white background
+
+**YOUR TASK:**
+
+**If PREVIOUS image is provided** (normal case):
+Compare the two SAM3-segmented images to determine:
+1. Is there a new part added, or is this the same assembly state?
+2. If new part added, what is it? (color, type, size, stud count)
+3. Where is the new part located?
+4. Provide a tight bounding box around the new part in the CURRENT image
+
+**If NO PREVIOUS image** (first placement):
+Analyze the CURRENT image to determine:
+1. What part(s) are visible in the first placement?
+2. Identify the part (color, type, size, stud count)
+3. Where is the part located in the frame?
+4. Provide a tight bounding box around the part in the CURRENT image
+
+**ANALYSIS GUIDELINES:**
+
+**First Placement Detection:**
+- If NO PREVIOUS image is provided → this is the FIRST placement
+- For first placement:
+  - Set is_duplicate = false
+  - Set has_new_part = true
+  - Analyze CURRENT image to identify the initial part(s)
+  - Usually this is a baseplate or foundation piece
+  - Provide bounding box for the main part visible
+
+**Visual Comparison (when PREVIOUS exists):**
+- These are SAM3-segmented images with white backgrounds (noise removed)
+- Compare the number of visible parts: prev vs current
+- Look for ANY difference in the assembly structure
+- The new part will be visible in CURRENT but not in PREVIOUS
+
+**Part Identification:**
+- **CRITICAL**: COUNT THE STUDS (round bumps on top) to determine size
+  - 1 stud = 1x1
+  - 2 studs in a row = 1x2 (rectangular)
+  - 4 studs in a 2x2 grid = 2x2 (square)
+  - 8 studs in a 2x4 grid = 2x4 (rectangular)
+- Identify COLOR by looking at the part
+- Identify TYPE: brick (thick), plate (thin), tile (no studs), special piece
+- Do NOT guess - only report what you can clearly see
+
+**Spatial Positioning:**
+- Location: Where on the assembly (e.g., "left side", "center", "top")
+- Reference: What is it attached to? (e.g., "baseplate", "previous white brick")
+- Orientation: How is it oriented? (e.g., "horizontal", "vertical", "upright")
+
+**Bounding Box (box_2d):**
+- Format: [ymin, xmin, ymax, xmax] where each value is 0-1000
+- 0 = top/left edge, 1000 = bottom/right edge
+- Draw a TIGHT box around the newly added part in CURRENT image
+- If no new part, set box_2d to null
+
+**Duplicate Detection:**
+- If prev and current look identical → is_duplicate = true
+- If you see the same number of parts in same positions → is_duplicate = true
+- Only mark as new part if you clearly see an additional piece
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON:
+
+```json
+{
+  "is_duplicate": false,
+  "has_new_part": true,
+  "what_changed": "A new dark grey 2x2 brick was added to the left side of the baseplate",
+  "new_part_detected": {
+    "description": "dark grey 2x2 brick",
+    "color": "dark grey",
+    "type": "brick",
+    "size": "2x2",
+    "stud_count": 4
+  },
+  "spatial_position": {
+    "location": "left side",
+    "reference_object": "grey baseplate",
+    "orientation": "upright"
+  },
+  "box_2d": [400, 100, 650, 300],
+  "confidence": 0.95,
+  "reasoning": "PREVIOUS image shows baseplate with 2 white bricks. CURRENT image shows baseplate with 2 white bricks PLUS one additional dark grey brick on the left side. STUD COUNT: The new dark grey brick has 4 visible studs arranged in a 2x2 grid (square pattern), confirming it is a 2x2 brick, not 1x2. The assembly grew from 2 parts to 3 parts."
+}
+```
+
+**If NO new part (duplicate):**
+
+```json
+{
+  "is_duplicate": true,
+  "has_new_part": false,
+  "what_changed": "No change detected - both images show identical assembly states",
+  "new_part_detected": null,
+  "spatial_position": null,
+  "box_2d": null,
+  "confidence": 1.0,
+  "reasoning": "PREVIOUS and CURRENT images are identical. Both show the same baseplate with the same 3 bricks in the same positions. No new part was added between these two frames."
+}
+```
+
+**If FIRST placement (no previous image):**
+
+```json
+{
+  "is_duplicate": false,
+  "has_new_part": true,
+  "what_changed": "First placement detected - initial baseplate placed",
+  "new_part_detected": {
+    "description": "light grey baseplate",
+    "color": "light grey",
+    "type": "baseplate",
+    "size": "large rectangular",
+    "stud_count": "multiple rows"
+  },
+  "spatial_position": {
+    "location": "center of frame",
+    "reference_object": "first piece",
+    "orientation": "flat horizontal"
+  },
+  "box_2d": [100, 100, 900, 900],
+  "confidence": 1.0,
+  "reasoning": "NO PREVIOUS image provided - this is the FIRST placement. CURRENT image shows a light grey baseplate as the foundation piece. This is the initial assembly state with no comparison needed. Baseplate is centered in frame and serves as the foundation for future placements."
+}
+```
+
+**IMPORTANT:**
+- **FIRST PLACEMENT**: If no PREVIOUS image → this is the first placement (is_duplicate=false, has_new_part=true)
+- COUNT STUDS carefully - this is CRITICAL for size determination
+- A 1x2 brick has 2 studs in a ROW (rectangular shape)
+- A 2x2 brick has 4 studs in a GRID (square shape)
+- Compare part count: if prev has N parts and current has N parts → likely duplicate
+- If prev has N parts and current has N+1 parts → new part added
+- Always provide box_2d when has_new_part is true
+- This is Pass 2b - you're doing visual comparison of SAM3 images only
+- Do NOT include any text before or after the JSON

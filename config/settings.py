@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     frame_classification_batch_size: int = 8  # frames per VLM call in video enhancement
     placement_min_confidence: float = 0.6  # minimum VLM confidence to accept a detected placement
 
+    # Roboflow Configuration (for SAM3 segmentation)
+    roboflow_api_key: Optional[str] = None
+
     # Paths (relative to project root)
     data_dir: Path = Path("./data")
     manual_dir: Path = Path("./data/manuals")

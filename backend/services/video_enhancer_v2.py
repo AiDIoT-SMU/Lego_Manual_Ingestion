@@ -11,6 +11,9 @@ Four VLM call pipeline:
 import io
 import base64
 import json
+import os
+import cv2
+import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -22,6 +25,18 @@ from backend.services.data_service import DataService
 from backend.services.video_quality_filter import VideoQualityFilter
 from backend.services.video_state_tracker import SubassemblyTracker
 from config.settings import Settings
+
+# Import SAM3 detector
+import sys
+sam3_path = Path(__file__).parent.parent.parent / "archive" / "yolo_world_sam3"
+if str(sam3_path) not in sys.path:
+    sys.path.insert(0, str(sam3_path))
+
+from yolo_world_sam3_detector import (
+    call_sam3_api,
+    annotate_frame_with_objects,
+    SAM3_CONFIDENCE_THRESHOLD
+)
 
 
 def _resize_image(image_path: str, width: int = 800) -> PILImage.Image:
@@ -103,6 +118,116 @@ def _parse_quantity_from_description(description: str) -> int:
     if match:
         return int(match.group(1))
     return 1
+
+
+def _apply_sam3_segmentation(
+    image_path: str,
+    output_path: Path,
+    api_key: str,
+    text_prompt: str = "lego assembly"
+) -> Optional[Path]:
+    """
+    Apply SAM3 segmentation to crop out the LEGO assembly with white background.
+
+    Uses SAM3 to detect the entire LEGO assembly region, crops it out, and places it
+    on a white background to remove noise (table, hands, other objects). This gives
+    the VLM a clean, focused view of just the assembly for better analysis.
+
+    Args:
+        image_path: Path to source image
+        output_path: Path to save cropped assembly on white background
+        api_key: Roboflow API key
+        text_prompt: Text prompt for SAM3 (default: "lego assembly")
+
+    Returns:
+        Path to cropped image with white background, or None if segmentation fails
+    """
+    try:
+        # Call SAM3 API with text prompt
+        sam3_response = call_sam3_api(
+            image_path=str(image_path),
+            text_prompts=[text_prompt],
+            api_key=api_key,
+            confidence_threshold=SAM3_CONFIDENCE_THRESHOLD
+        )
+
+        if not sam3_response:
+            logger.warning(f"SAM3 returned no response for {image_path}")
+            return None
+
+        # Load the original image
+        img = cv2.imread(str(image_path))
+        if img is None:
+            logger.warning(f"Could not load image {image_path}")
+            return None
+
+        # Parse SAM3 response and extract the assembly region
+        prompt_results = sam3_response.get("prompt_results", [])
+        if not prompt_results:
+            logger.warning(f"SAM3 returned no prompt_results for {image_path}")
+            return None
+
+        # Get the first (and typically only) detection - the entire assembly
+        predictions = prompt_results[0].get("predictions", [])
+        if not predictions:
+            logger.warning(f"SAM3 detected no assembly in {image_path}")
+            return None
+
+        # Use the first prediction (highest confidence)
+        pred = predictions[0]
+        masks = pred.get("masks", [])
+        if not masks:
+            logger.warning(f"SAM3 prediction has no mask for {image_path}")
+            return None
+
+        # Get bounding box from polygon mask
+        polygon = masks[0]  # [[x, y], [x, y], ...]
+        pts = np.array(polygon, dtype=np.int32)
+        x_coords = [p[0] for p in polygon]
+        y_coords = [p[1] for p in polygon]
+        x_min, x_max = int(min(x_coords)), int(max(x_coords))
+        y_min, y_max = int(min(y_coords)), int(max(y_coords))
+
+        # Add padding around the assembly (15% on each side for context)
+        height, width = img.shape[:2]
+        padding_x = max(20, int((x_max - x_min) * 0.15))
+        padding_y = max(20, int((y_max - y_min) * 0.15))
+
+        x_min_padded = max(0, x_min - padding_x)
+        x_max_padded = min(width, x_max + padding_x)
+        y_min_padded = max(0, y_min - padding_y)
+        y_max_padded = min(height, y_max + padding_y)
+
+        # Create a binary mask from the polygon
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(mask, [pts], 255)
+
+        # Crop both the image and mask to the padded bounding box
+        cropped_img = img[y_min_padded:y_max_padded, x_min_padded:x_max_padded].copy()
+        cropped_mask = mask[y_min_padded:y_max_padded, x_min_padded:x_max_padded]
+
+        if cropped_img.size == 0:
+            logger.warning(f"SAM3 crop resulted in empty image for {image_path}")
+            return None
+
+        # Create white background with same dimensions as cropped region
+        white_bg = np.ones_like(cropped_img, dtype=np.uint8) * 255
+
+        # Apply mask to extract only the assembly pixels
+        # Where mask is 255 (assembly), use original pixels; where 0, use white
+        cropped_mask_3ch = cv2.cvtColor(cropped_mask, cv2.COLOR_GRAY2BGR)
+        result = np.where(cropped_mask_3ch > 0, cropped_img, white_bg)
+
+        # Save the result
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(output_path), result)
+
+        logger.debug(f"SAM3 cropped assembly (white background) saved to {output_path}")
+        return output_path
+
+    except Exception as e:
+        logger.warning(f"SAM3 segmentation failed for {image_path}: {e}")
+        return None
 
 
 def _draw_placement_bbox(
@@ -194,11 +319,28 @@ class VideoEnhancerV2:
             else self._get_default_frame_quality_prompt()
         )
 
-        placement_validation_path = prompts_dir / "video_placement_validation.txt"
-        self.placement_validation_template = (
-            placement_validation_path.read_text()
-            if placement_validation_path.exists()
-            else self._get_default_placement_validation_prompt()
+        # Load Pass 2a prompt (action analysis)
+        pass2a_path = prompts_dir / "video_pass2a_action_analysis.txt"
+        self.pass2a_template = (
+            pass2a_path.read_text()
+            if pass2a_path.exists()
+            else ""
+        )
+
+        # Load Pass 2b prompt (SAM3 comparison)
+        pass2b_path = prompts_dir / "video_pass2b_sam3_comparison.txt"
+        self.pass2b_template = (
+            pass2b_path.read_text()
+            if pass2b_path.exists()
+            else ""
+        )
+
+        # Load Pass 2c prompt (reconciliation)
+        pass2c_path = prompts_dir / "video_pass2c_reconciliation.txt"
+        self.pass2c_template = (
+            pass2c_path.read_text()
+            if pass2c_path.exists()
+            else ""
         )
 
         atomic_substeps_path = prompts_dir / "video_atomic_substeps.txt"
@@ -206,20 +348,6 @@ class VideoEnhancerV2:
             atomic_substeps_path.read_text()
             if atomic_substeps_path.exists()
             else self._get_default_atomic_substeps_prompt()
-        )
-
-        placement_reconciliation_path = prompts_dir / "video_placement_reconciliation.txt"
-        self.placement_reconciliation_template = (
-            placement_reconciliation_path.read_text()
-            if placement_reconciliation_path.exists()
-            else self._get_default_placement_reconciliation_prompt()
-        )
-
-        action_frame_analysis_path = prompts_dir / "video_action_frame_analysis.txt"
-        self.action_frame_analysis_template = (
-            action_frame_analysis_path.read_text()
-            if action_frame_analysis_path.exists()
-            else self._get_default_action_frame_analysis_prompt()
         )
 
         # Initialize quality filter and subassembly tracker
@@ -634,63 +762,138 @@ class VideoEnhancerV2:
 
         return result
 
-    # ── VLM Pass 2a: Action Frame Analysis (Sub-call within Pass 2) ──────────
+    # ── VLM Pass 2a: Action Frame Analysis (DEPRECATED - now unified with Pass 2b) ──────────
 
     def _analyze_action_frames(
         self,
         action_frames: List[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
         """
-        VLM Pass 2a: Analyze action frames to identify what part is being manipulated.
+        DEPRECATED: VLM Pass 2a: Analyze action frames to identify what part is being manipulated.
 
-        This is called WITHIN Pass 2 for each placement candidate, to determine if the
-        part being touched is new (pickup) or already placed (adjustment).
+        This method is deprecated and replaced by _unified_placement_analysis which combines
+        Pass 2a and 2b into a single multimodal call.
+
+        Kept for backwards compatibility only.
+        """
+        logger.warning("_analyze_action_frames is deprecated. Use _unified_placement_analysis instead.")
+        return None
+
+    # ── VLM Pass 2a: Action Sequence Analysis (No SAM3) ──────────
+
+    def _pass2a_action_analysis(
+        self,
+        prev_placement_frame: Optional[Dict[str, Any]],
+        action_frames: List[Dict[str, Any]],
+        current_placement_frame: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Pass 2a: Analyze action sequence to understand what action is being performed.
 
         Args:
-            action_frames: List of action frame metadata between two placement frames
+            prev_placement_frame: Previous accepted placement frame dict (or None for first placement)
+            action_frames: ALL action frames between prev and current placement
+            current_placement_frame: Current placement candidate frame dict
 
         Returns:
             {
-                "part_being_manipulated": str,
-                "color": str,
-                "part_type": str,
-                "size": str,
-                "action_type": "pickup" or "adjustment",
+                "action_type": str,
+                "has_new_part": bool,
+                "part_from_actions": {description, color, type, approximate_size, confidence},
+                "action_narrative": str,
                 "confidence": float,
                 "reasoning": str
             }
             or None if analysis fails
         """
-        if not action_frames:
-            return None
-
         try:
-            # Build content with all action frame images
             content = []
-            content.append({
-                "type": "text",
-                "text": f"Analyzing {len(action_frames)} action frames in sequence:"
-            })
 
-            for idx, frame_data in enumerate(action_frames, 1):
-                frame_path = frame_data.get("frame_path")
-                frame_num = frame_data.get("frame_number")
-                if frame_path:
-                    frame_img = _resize_image(str(frame_path), width=800)
-                    frame_b64 = _image_to_b64(frame_img)
+            # === PREVIOUS PLACEMENT FRAME ===
+            if prev_placement_frame:
+                prev_frame_path_str = prev_placement_frame.get("frame_path")
+                prev_frame_num = prev_placement_frame.get("frame_number")
+
+                # Resolve the full path
+                prev_frame_path = Path(prev_frame_path_str)
+                if not prev_frame_path.is_absolute():
+                    if prev_frame_path.parts[0] == 'data':
+                        prev_frame_path = self.settings.data_dir / Path(*prev_frame_path.parts[1:])
+                    else:
+                        prev_frame_path = self.settings.data_dir / prev_frame_path
+
+                prev_img = _resize_image(str(prev_frame_path), width=800)
+                prev_b64 = _image_to_b64(prev_img)
+                content.append({
+                    "type": "text",
+                    "text": f"PREVIOUS PLACEMENT FRAME (frame {prev_frame_num}):"
+                })
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{prev_b64}"}
+                })
+            else:
+                content.append({
+                    "type": "text",
+                    "text": "PREVIOUS PLACEMENT FRAME: None (this is the first placement)"
+                })
+
+            # === ALL ACTION FRAMES (NO SAMPLING) ===
+            if action_frames:
+                content.append({
+                    "type": "text",
+                    "text": f"ACTION FRAMES ({len(action_frames)} frames showing hands manipulating parts):"
+                })
+                for idx, action_frame in enumerate(action_frames):
+                    action_frame_path_str = action_frame.get("frame_path")
+                    action_frame_num = action_frame.get("frame_number")
+
+                    # Resolve the full path
+                    action_frame_path = Path(action_frame_path_str)
+                    if not action_frame_path.is_absolute():
+                        if action_frame_path.parts[0] == 'data':
+                            action_frame_path = self.settings.data_dir / Path(*action_frame_path.parts[1:])
+                        else:
+                            action_frame_path = self.settings.data_dir / action_frame_path
+
+                    action_img = _resize_image(str(action_frame_path), width=600)
+                    action_b64 = _image_to_b64(action_img)
                     content.append({
                         "type": "text",
-                        "text": f"Action Frame {idx}/{len(action_frames)} (Frame #{frame_num}):"
+                        "text": f"Action Frame {idx+1}/{len(action_frames)} (frame {action_frame_num}):"
                     })
                     content.append({
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{frame_b64}"}
+                        "image_url": {"url": f"data:image/jpeg;base64,{action_b64}"}
                     })
 
-            # Add prompt
+            # === CURRENT PLACEMENT FRAME ===
+            current_frame_path_str = current_placement_frame.get("frame_path")
+            current_frame_num = current_placement_frame.get("frame_number")
+
+            # Resolve the full path
+            current_frame_path = Path(current_frame_path_str)
+            if not current_frame_path.is_absolute():
+                if current_frame_path.parts[0] == 'data':
+                    current_frame_path = self.settings.data_dir / Path(*current_frame_path.parts[1:])
+                else:
+                    current_frame_path = self.settings.data_dir / current_frame_path
+
+            current_img = _resize_image(str(current_frame_path), width=800)
+            current_b64 = _image_to_b64(current_img)
             content.append({
                 "type": "text",
-                "text": self.action_frame_analysis_template
+                "text": f"CURRENT PLACEMENT FRAME (frame {current_frame_num}):"
+            })
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{current_b64}"}
+            })
+
+            # === PROMPT ===
+            content.append({
+                "type": "text",
+                "text": self.pass2a_template
             })
 
             # Make VLM call
@@ -701,7 +904,165 @@ class VideoEnhancerV2:
             return result
 
         except Exception as e:
-            logger.warning(f"Action frame analysis failed: {e}")
+            logger.error(f"Pass 2a action analysis failed: {e}")
+            return None
+
+    # ── VLM Pass 2b: SAM3 Comparison ──────────
+
+    def _pass2b_sam3_comparison(
+        self,
+        prev_placement_frame: Optional[Dict[str, Any]],
+        current_placement_frame: Dict[str, Any],
+        manual_id: str,
+        video_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Pass 2b: Compare SAM3-segmented images (prev vs current) to identify what changed.
+
+        Args:
+            prev_placement_frame: Previous accepted placement frame dict (or None for first placement)
+            current_placement_frame: Current placement candidate frame dict
+            manual_id: Manual identifier
+            video_id: Video identifier
+
+        Returns:
+            {
+                "is_duplicate": bool,
+                "has_new_part": bool,
+                "what_changed": str,
+                "new_part_detected": {description, color, type, size, stud_count},
+                "spatial_position": {location, reference_object, orientation},
+                "box_2d": [ymin, xmin, ymax, xmax],
+                "confidence": float,
+                "reasoning": str,
+                "sam3_prev_path": str,
+                "sam3_current_path": str
+            }
+            or None if analysis fails
+        """
+        try:
+            content = []
+            sam3_prev_used = None
+            sam3_current_used = None
+
+            # === PREVIOUS PLACEMENT FRAME ===
+            if prev_placement_frame is None:
+                # First placement - explicitly tell the VLM there's no previous frame
+                content.append({
+                    "type": "text",
+                    "text": "PREVIOUS PLACEMENT: None (this is the FIRST placement)"
+                })
+            elif prev_placement_frame:
+                prev_frame_path_str = prev_placement_frame.get("frame_path")
+                prev_frame_num = prev_placement_frame.get("frame_number")
+
+                # Resolve the full path - handle both absolute and relative paths
+                prev_frame_path = Path(prev_frame_path_str)
+                if not prev_frame_path.is_absolute():
+                    # If relative, it might be relative to data_dir or project root
+                    if prev_frame_path.parts[0] == 'data':
+                        # Relative from project root, remove 'data' prefix
+                        prev_frame_path = self.settings.data_dir / Path(*prev_frame_path.parts[1:])
+                    else:
+                        # Relative from data_dir
+                        prev_frame_path = self.settings.data_dir / prev_frame_path
+
+                # Apply SAM3 segmentation to previous frame (always use SAM3 for Pass 2b)
+                if self.settings.roboflow_api_key:
+                    sam3_dir = self.settings.data_dir / "processed" / manual_id / f"sam3_segmented_{video_id}"
+                    sam3_prev_path = sam3_dir / f"prev_frame_{prev_frame_num}_sam3.jpg"
+
+                    segmented_path = _apply_sam3_segmentation(
+                        image_path=str(prev_frame_path),
+                        output_path=sam3_prev_path,
+                        api_key=self.settings.roboflow_api_key,
+                        text_prompt="lego assembly"
+                    )
+
+                    if segmented_path:
+                        # Use SAM3 segmented version
+                        sam3_prev_used = str(segmented_path.relative_to(self.settings.data_dir))
+                        prev_img = _resize_image(str(segmented_path), width=800)
+                        prev_b64 = _image_to_b64(prev_img)
+                        content.append({
+                            "type": "text",
+                            "text": f"PREVIOUS PLACEMENT (SAM3 segmented, frame {prev_frame_num}):"
+                        })
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{prev_b64}"}
+                        })
+                    else:
+                        logger.warning(f"SAM3 failed for prev frame {prev_frame_num} - cannot run Pass 2b without SAM3")
+                        return None
+                else:
+                    logger.warning("Pass 2b requires SAM3 segmentation but ROBOFLOW_API_KEY not set")
+                    return None
+
+            # === CURRENT PLACEMENT FRAME ===
+            current_frame_path_str = current_placement_frame.get("frame_path")
+            current_frame_num = current_placement_frame.get("frame_number")
+
+            # Resolve the full path
+            current_frame_path = Path(current_frame_path_str)
+            if not current_frame_path.is_absolute():
+                if current_frame_path.parts[0] == 'data':
+                    current_frame_path = self.settings.data_dir / Path(*current_frame_path.parts[1:])
+                else:
+                    current_frame_path = self.settings.data_dir / current_frame_path
+
+            # Apply SAM3 segmentation to current frame (always use SAM3 for Pass 2b)
+            if self.settings.roboflow_api_key:
+                sam3_dir = self.settings.data_dir / "processed" / manual_id / f"sam3_segmented_{video_id}"
+                sam3_current_path = sam3_dir / f"current_frame_{current_frame_num}_sam3.jpg"
+
+                segmented_path = _apply_sam3_segmentation(
+                    image_path=str(current_frame_path),
+                    output_path=sam3_current_path,
+                    api_key=self.settings.roboflow_api_key,
+                    text_prompt="lego assembly"
+                )
+
+                if segmented_path:
+                    # Use SAM3 segmented version
+                    sam3_current_used = str(segmented_path.relative_to(self.settings.data_dir))
+                    current_img = _resize_image(str(segmented_path), width=800)
+                    current_b64 = _image_to_b64(current_img)
+                    content.append({
+                        "type": "text",
+                        "text": f"CURRENT PLACEMENT (SAM3 segmented, frame {current_frame_num}):"
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{current_b64}"}
+                    })
+                else:
+                    logger.warning(f"SAM3 failed for current frame {current_frame_num} - cannot run Pass 2b without SAM3")
+                    return None
+            else:
+                logger.warning("Pass 2b requires SAM3 segmentation but ROBOFLOW_API_KEY not set")
+                return None
+
+            # === PROMPT ===
+            content.append({
+                "type": "text",
+                "text": self.pass2b_template
+            })
+
+            # Make VLM call
+            messages = [{"role": "user", "content": content}]
+            raw = self.vlm._litellm_with_retry(messages)
+            result = _parse_json(raw)
+
+            # Add SAM3 paths to result for logging
+            if result:
+                result["sam3_prev_path"] = sam3_prev_used
+                result["sam3_current_path"] = sam3_current_used
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Pass 2b SAM3 comparison failed: {e}")
             return None
 
     # ── VLM Pass 2: Context-Aware Placement Validation ───────────────────────
@@ -806,8 +1167,7 @@ class VideoEnhancerV2:
                 continue
 
             try:
-                # === VLM PASS 2a: Analyze action frames between placements ===
-                action_frame_analysis = None
+                # === Find action frames between placements ===
                 action_frames_between = []
 
                 if last_accepted_candidate is not None:
@@ -834,86 +1194,48 @@ class VideoEnhancerV2:
                         )
                         continue
 
-                    # Analyze action frames to identify what part is being manipulated
-                    logger.debug(f"  Frame {frame_num}: Analyzing {len(action_frames_between)} action frames between placements")
-                    action_frame_analysis = self._analyze_action_frames(action_frames_between)
+                # === VLM PASS 2a: Action Analysis ===
+                logger.debug(f"  Frame {frame_num}: Pass 2a - Analyzing action sequence ({len(action_frames_between)} action frames)")
 
-                    if action_frame_analysis:
-                        logger.debug(
-                            f"  Action frame analysis: {action_frame_analysis.get('part_being_manipulated')} "
-                            f"({action_frame_analysis.get('action_type')})"
-                        )
-
-                # Build previous placement context
-                previous_placement_context = ""
-                if validated_placements:
-                    last_placements = validated_placements[-3:]
-                    previous_placement_context = "**PREVIOUS PLACEMENTS (what was already placed):**\n"
-                    for idx, placement in enumerate(last_placements, 1):
-                        previous_placement_context += f"{idx}. {placement.get('action_description', 'N/A')}\n"
-                    previous_placement_context += "\nIf current frame shows the SAME total number of objects as expected from previous placements, then NO new part was added.\n\n"
-
-                # Build action frame context
-                action_frame_context = ""
-                if action_frame_analysis:
-                    action_type = action_frame_analysis.get('action_type', 'unknown')
-                    part_desc = action_frame_analysis.get('part_being_manipulated', 'unknown part')
-                    reasoning = action_frame_analysis.get('reasoning', '')
-
-                    action_frame_context = f"**ACTION FRAMES BETWEEN PLACEMENTS ({len(action_frames_between)} frames analyzed):**\n"
-                    action_frame_context += f"Part being manipulated: {part_desc}\n"
-                    action_frame_context += f"Action type: {action_type.upper()}\n"
-
-                    if action_type == "adjustment":
-                        action_frame_context += f"Note: This part ({part_desc}) was already placed and is being adjusted.\n"
-                    elif action_type == "pickup":
-                        action_frame_context += f"Note: This part ({part_desc}) is being picked up for a new placement.\n"
-
-                    action_frame_context += f"Reasoning: {reasoning}\n\n"
-
-                # Use frame for VLM analysis
-                current_img = _resize_image(str(current_frame["frame_path"]), width=800)
-                current_b64 = _image_to_b64(current_img)
-
-                # Build prompt with context
-                prompt_with_context = (
-                    previous_placement_context +
-                    action_frame_context +
-                    self.placement_validation_template
+                pass2a_result = self._pass2a_action_analysis(
+                    prev_placement_frame=last_accepted_candidate,
+                    action_frames=action_frames_between,
+                    current_placement_frame=current_frame
                 )
 
-                # Build content with previous and current frames only
-                if i == 0:
-                    # First placement - no previous frame
-                    content = [
-                        {"type": "text", "text": "CURRENT PLACEMENT FRAME (first placement — no previous frame):"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
-                        {"type": "text", "text": prompt_with_context}
-                    ]
+                if not pass2a_result:
+                    logger.warning(f"  Placement {i} (frame {frame_num}): Pass 2a failed, skipping")
+                    continue
+
+                # === VLM PASS 2b: SAM3 Comparison ===
+                logger.debug(f"  Frame {frame_num}: Pass 2b - Comparing SAM3 segmented images")
+
+                pass2b_result = self._pass2b_sam3_comparison(
+                    prev_placement_frame=last_accepted_candidate,
+                    current_placement_frame=current_frame,
+                    manual_id=manual_id,
+                    video_id=video_id
+                )
+
+                if not pass2b_result:
+                    logger.warning(f"  Placement {i} (frame {frame_num}): Pass 2b failed (SAM3 required), skipping")
+                    continue
+
+                # Check if either pass detected a duplicate
+                pass2a_has_new = pass2a_result.get("has_new_part", False)
+                pass2b_has_new = pass2b_result.get("has_new_part", False)
+                pass2b_is_dup = pass2b_result.get("is_duplicate", False)
+
+                # If Pass 2b (SAM3 comparison) says duplicate, trust it
+                if pass2b_is_dup or not pass2b_has_new:
+                    is_duplicate = True
+                    has_new_part = False
                 else:
-                    # Use the last ACCEPTED placement as the reference frame so that
-                    # we always compare against a known-good state, not a skipped candidate.
-                    prev_frame = last_accepted_candidate if last_accepted_candidate is not None else placement_candidates[i - 1]
-                    prev_img = _resize_image(str(prev_frame["frame_path"]), width=800)
-                    prev_b64 = _image_to_b64(prev_img)
-                    prev_frame_num = prev_frame.get("frame_number", "?")
+                    is_duplicate = False
+                    has_new_part = pass2b_has_new
 
-                    content = [
-                        {"type": "text", "text": f"PREVIOUS PLACEMENT FRAME (frame {prev_frame_num} — last accepted placement):"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{prev_b64}"}},
-                        {"type": "text", "text": f"CURRENT PLACEMENT FRAME (frame {frame_num}):"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_b64}"}},
-                        {"type": "text", "text": prompt_with_context}
-                    ]
-
-                messages = [{"role": "user", "content": content}]
-
-                raw = self.vlm._litellm_with_retry(messages)
-                result = _parse_json(raw)
-
-                has_new_part = result.get("has_new_part", False)
-                is_duplicate = result.get("is_duplicate_of_previous", False)
-                confidence = result.get("confidence", 0.0)
+                # Use Pass 2b confidence for filtering (SAM3 is more reliable)
+                confidence = pass2b_result.get("confidence", 0.0)
 
                 # === DETAILED LOGGING FOR VLM REASONING ===
                 # Write detailed comparison log to file
@@ -945,36 +1267,49 @@ class VideoEnhancerV2:
                         log_file.write("  (No previous placements)\n")
                     log_file.write("\n")
 
-                    # Action frame analysis (VLM Pass 2a)
+                    # Action frames info
                     log_file.write(f"ACTION FRAMES BETWEEN PLACEMENTS: {len(action_frames_between)} frames\n")
                     if action_frames_between:
                         log_file.write(f"  Frame numbers: {[f.get('frame_number') for f in action_frames_between]}\n")
-                    if action_frame_analysis:
-                        log_file.write("VLM PASS 2a - ACTION FRAME ANALYSIS:\n")
-                        log_file.write(f"  part_being_manipulated: {action_frame_analysis.get('part_being_manipulated', 'N/A')}\n")
-                        log_file.write(f"  color: {action_frame_analysis.get('color', 'N/A')}\n")
-                        log_file.write(f"  part_type: {action_frame_analysis.get('part_type', 'N/A')}\n")
-                        log_file.write(f"  size: {action_frame_analysis.get('size', 'N/A')}\n")
-                        log_file.write(f"  action_type: {action_frame_analysis.get('action_type', 'N/A').upper()}\n")
-                        log_file.write(f"  confidence: {action_frame_analysis.get('confidence', 0.0):.2f}\n")
-                        log_file.write(f"  reasoning: {action_frame_analysis.get('reasoning', 'N/A')}\n")
-                    else:
-                        log_file.write("  (No action frame analysis)\n")
                     log_file.write("\n")
 
                     # Current frame info
                     log_file.write(f"CURRENT FRAME: Frame {frame_num} (timestamp: {timestamp:.2f}s)\n")
                     log_file.write(f"  Path: {current_frame.get('frame_path', 'N/A')}\n\n")
 
-                    # VLM Decision
-                    log_file.write("VLM PASS 2b - PLACEMENT VALIDATION DECISION:\n")
-                    log_file.write(f"  has_new_part: {has_new_part}\n")
-                    log_file.write(f"  is_duplicate_of_previous: {is_duplicate}\n")
-                    log_file.write(f"  confidence: {confidence:.2f}\n")
-                    log_file.write(f"  action_description: {result.get('action_description', 'N/A')}\n")
-                    log_file.write(f"  new_parts_added: {result.get('new_parts_added', [])}\n")
-                    log_file.write(f"  reasoning: {result.get('reasoning', 'N/A')}\n")
-                    log_file.write(f"  visual_difference: {result.get('visual_difference', 'N/A')}\n\n")
+                    # VLM Pass 2a (Action Analysis)
+                    log_file.write("VLM PASS 2a - ACTION ANALYSIS:\n")
+                    log_file.write(f"  Analyzed {len(action_frames_between)} action frames between prev and current\n")
+                    log_file.write(f"  VLM Output:\n")
+                    log_file.write(f"    action_type: {pass2a_result.get('action_type', 'N/A')}\n")
+                    log_file.write(f"    has_new_part: {pass2a_result.get('has_new_part', False)}\n")
+                    log_file.write(f"    part_from_actions: {pass2a_result.get('part_from_actions', 'N/A')}\n")
+                    log_file.write(f"    action_narrative: {pass2a_result.get('action_narrative', 'N/A')}\n")
+                    log_file.write(f"    confidence: {pass2a_result.get('confidence', 0.0):.2f}\n")
+                    log_file.write(f"    reasoning: {pass2a_result.get('reasoning', 'N/A')}\n\n")
+
+                    # VLM Pass 2b (SAM3 Comparison)
+                    log_file.write("VLM PASS 2b - SAM3 COMPARISON:\n")
+                    sam3_prev = pass2b_result.get('sam3_prev_path', None)
+                    sam3_current = pass2b_result.get('sam3_current_path', None)
+                    log_file.write(f"  Comparing SAM3 segmented images:\n")
+                    if sam3_prev:
+                        log_file.write(f"    Previous (SAM3): {sam3_prev}\n")
+                    else:
+                        log_file.write(f"    Previous: SAM3 failed\n")
+                    if sam3_current:
+                        log_file.write(f"    Current (SAM3): {sam3_current}\n")
+                    else:
+                        log_file.write(f"    Current: SAM3 failed\n")
+                    log_file.write(f"\n  VLM Output:\n")
+                    log_file.write(f"    is_duplicate: {pass2b_result.get('is_duplicate', False)}\n")
+                    log_file.write(f"    has_new_part: {pass2b_result.get('has_new_part', False)}\n")
+                    log_file.write(f"    what_changed: {pass2b_result.get('what_changed', 'N/A')}\n")
+                    log_file.write(f"    new_part_detected: {pass2b_result.get('new_part_detected', 'N/A')}\n")
+                    log_file.write(f"    spatial_position: {pass2b_result.get('spatial_position', {})}\n")
+                    log_file.write(f"    box_2d: {pass2b_result.get('box_2d', 'N/A')}\n")
+                    log_file.write(f"    confidence: {pass2b_result.get('confidence', 0.0):.2f}\n")
+                    log_file.write(f"    reasoning: {pass2b_result.get('reasoning', 'N/A')}\n\n")
 
                     # Final verdict
                     if is_duplicate or not has_new_part:
@@ -1003,69 +1338,209 @@ class VideoEnhancerV2:
                     )
                     continue
 
-                action_desc = result.get("action_description")
+                # Use Pass 2b's detected part info for now (will be reconciled by Pass 2c)
+                new_part_detected = pass2b_result.get("new_part_detected", {})
+                spatial_position = pass2b_result.get("spatial_position", {})
+                box_2d = pass2b_result.get("box_2d")
 
-                if action_desc:
-                    # Check for subassembly switch
-                    is_subassembly_switch = self.subassembly_tracker.detect_subassembly_switch(
-                        action_desc, frame_num
+                # Create preliminary action description from Pass 2b
+                if isinstance(new_part_detected, dict):
+                    part_desc = new_part_detected.get("description", "unknown part")
+                    action_desc = f"Add {part_desc}"
+                else:
+                    action_desc = "Add part"
+
+                # Check for subassembly switch
+                is_subassembly_switch = self.subassembly_tracker.detect_subassembly_switch(
+                    action_desc, frame_num
+                )
+
+                # Get relative path from data_dir for storage
+                frame_path_obj = Path(current_frame["frame_path"])
+                try:
+                    relative_frame_path = str(frame_path_obj.relative_to(self.settings.data_dir))
+                except ValueError:
+                    # If not relative to data_dir, use absolute path
+                    relative_frame_path = str(frame_path_obj)
+
+                # Draw annotated frame with bounding box from Pass 2b
+                annotated_frame_path = _draw_placement_bbox(
+                    frame_path=current_frame["frame_path"],
+                    box_2d=box_2d,
+                    frame_num=frame_num,
+                    label=action_desc,
+                    confidence=confidence,
+                    output_dir=self.settings.data_dir / "processed" / manual_id / f"validated_placement_annotated_{video_id}"
+                )
+
+                # Prepare placement metadata for Pass 2c
+                placement_metadata: Dict[str, Any] = {
+                    "placement_index": i,
+                    "frame_number": frame_num,
+                    "timestamp": timestamp,
+                    "frame_path": relative_frame_path,
+                    "box_2d": box_2d,
+                    "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
+                }
+
+                # === VLM PASS 2c: IMMEDIATE RECONCILIATION ===
+                # Reconcile Pass 2a + Pass 2b + expected parts to determine final part identity
+                logger.debug(f"  Placement {i}: Pass 2c - Reconciling all sources...")
+                step_data = parts_by_step.get(current_step, {})
+                expected_parts_data = step_data.get("parts", [])
+
+                try:
+                    reconciliation = await self._pass2c_reconcile_all_sources(
+                        pass2a_result=pass2a_result,
+                        pass2b_result=pass2b_result,
+                        placement=placement_metadata,
+                        expected_parts=expected_parts_data,
+                        step_number=current_step,
+                        manual_id=manual_id
                     )
 
-                    # Get relative path from data_dir for storage
-                    frame_path_obj = Path(current_frame["frame_path"])
-                    try:
-                        relative_frame_path = str(frame_path_obj.relative_to(self.settings.data_dir))
-                    except ValueError:
-                        # If not relative to data_dir, use absolute path
-                        relative_frame_path = str(frame_path_obj)
+                    # Extract final part from Pass 2c
+                    final_part = reconciliation.get("final_part", {})
+                    if isinstance(final_part, dict):
+                        final_desc = final_part.get("description", "unknown part")
+                        final_action_desc = f"Add {final_desc}"
+                    else:
+                        final_action_desc = action_desc  # Fallback to preliminary
 
-                    # Draw annotated frame with bounding box if the VLM returned one
-                    box_2d = result.get("box_2d")
-                    annotated_frame_path = _draw_placement_bbox(
-                        frame_path=current_frame["frame_path"],
-                        box_2d=box_2d,
-                        frame_num=frame_num,
-                        label=action_desc,
-                        confidence=confidence,
-                        output_dir=self.settings.data_dir / "processed" / manual_id / f"validated_placement_annotated_{video_id}"
-                    )
+                    # Build final action_data with reconciled information
+                    action_data: Dict[str, Any] = {
+                        "placement_index": i,
+                        "frame_number": frame_num,
+                        "timestamp": timestamp,
+                        "frame_path": relative_frame_path,
+                        "action_description": final_action_desc,  # Use Pass 2c's final result
+                        "new_parts": [final_part] if final_part else [],
+                        "spatial_position": spatial_position,
+                        "box_2d": box_2d,
+                        "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
+                        "is_subassembly_switch": is_subassembly_switch,
+                        "current_subassembly": self.subassembly_tracker.get_current_subassembly(),
+                        "manual_step": current_step,
+                        "confidence": confidence,
+                        "reconciliation": {
+                            "pass2a_result": pass2a_result,
+                            "pass2b_result": pass2b_result,
+                            "pass2c_result": reconciliation,
+                            "sources_agree": reconciliation.get("sources_agree", False),
+                            "matched_part": reconciliation.get("matched_part"),
+                            "video_detection_correct": reconciliation.get("video_detection_correct", True),
+                            "correction": reconciliation.get("correction"),
+                            "reasoning": reconciliation.get("reasoning", "")
+                        }
+                    }
 
+                    # Add to validated placements
+                    validated_placements.append(action_data)
+                    last_accepted_candidate = current_frame
+
+                    # Log Pass 2c reconciliation results
+                    with open(comparison_log_path, "a", encoding="utf-8") as log_file:
+                        log_file.write("VLM PASS 2c - RECONCILIATION (Pass 2a + Pass 2b + Expected Parts):\n")
+                        log_file.write(f"  Inputs:\n")
+                        log_file.write(f"\n    Pass 2a Result (Action Analysis):\n")
+                        log_file.write(f"      action_type: {pass2a_result.get('action_type', 'N/A')}\n")
+                        log_file.write(f"      has_new_part: {pass2a_result.get('has_new_part', 'N/A')}\n")
+                        pass2a_part = pass2a_result.get('part_from_actions', {})
+                        if pass2a_part:
+                            log_file.write(f"      part_from_actions:\n")
+                            log_file.write(f"        description: {pass2a_part.get('description', 'N/A')}\n")
+                            log_file.write(f"        color: {pass2a_part.get('color', 'N/A')}\n")
+                            log_file.write(f"        type: {pass2a_part.get('type', 'N/A')}\n")
+                            log_file.write(f"        approximate_size: {pass2a_part.get('approximate_size', 'N/A')}\n")
+                            log_file.write(f"        confidence: {pass2a_part.get('confidence', 'N/A')}\n")
+                        else:
+                            log_file.write(f"      part_from_actions: None\n")
+                        log_file.write(f"      action_narrative: {pass2a_result.get('action_narrative', 'N/A')}\n")
+
+                        log_file.write(f"\n    Pass 2b Result (SAM3 Comparison):\n")
+                        log_file.write(f"      is_duplicate: {pass2b_result.get('is_duplicate', 'N/A')}\n")
+                        log_file.write(f"      has_new_part: {pass2b_result.get('has_new_part', 'N/A')}\n")
+                        pass2b_part = pass2b_result.get('new_part_detected', {})
+                        if pass2b_part:
+                            log_file.write(f"      new_part_detected:\n")
+                            log_file.write(f"        description: {pass2b_part.get('description', 'N/A')}\n")
+                            log_file.write(f"        color: {pass2b_part.get('color', 'N/A')}\n")
+                            log_file.write(f"        type: {pass2b_part.get('type', 'N/A')}\n")
+                            log_file.write(f"        size: {pass2b_part.get('size', 'N/A')}\n")
+                            log_file.write(f"        stud_count: {pass2b_part.get('stud_count', 'N/A')}\n")
+                        else:
+                            log_file.write(f"      new_part_detected: None\n")
+                        pass2b_spatial = pass2b_result.get('spatial_position', {})
+                        if pass2b_spatial:
+                            log_file.write(f"      spatial_position:\n")
+                            log_file.write(f"        location: {pass2b_spatial.get('location', 'N/A')}\n")
+                            log_file.write(f"        reference_object: {pass2b_spatial.get('reference_object', 'N/A')}\n")
+                        log_file.write(f"      box_2d: {pass2b_result.get('box_2d', 'N/A')}\n")
+
+                        log_file.write(f"\n    Expected Parts for Step {current_step}:\n")
+                        log_file.write(f"      Total parts: {len(expected_parts_data)}\n")
+                        if expected_parts_data:
+                            for idx, part in enumerate(expected_parts_data[:3], 1):  # Show first 3 parts
+                                log_file.write(f"      Part {idx}: {part.get('description', 'N/A')} (color: {part.get('color', 'N/A')}, type: {part.get('type', 'N/A')}, size: {part.get('size', 'N/A')})\n")
+                            if len(expected_parts_data) > 3:
+                                log_file.write(f"      ... and {len(expected_parts_data) - 3} more parts\n")
+
+                        log_file.write(f"\n  VLM Output:\n")
+                        log_file.write(f"    sources_agree: {reconciliation.get('sources_agree', False)}\n")
+                        log_file.write(f"    pass2a_correct: {reconciliation.get('pass2a_correct', 'N/A')}\n")
+                        log_file.write(f"    pass2b_correct: {reconciliation.get('pass2b_correct', 'N/A')}\n")
+                        log_file.write(f"    final_part: {final_part.get('description', 'N/A')}\n")
+                        log_file.write(f"    stud_count_analysis: {reconciliation.get('stud_count_analysis', {})}\n")
+                        log_file.write(f"    corrections: {reconciliation.get('corrections', {})}\n")
+                        log_file.write(f"    reasoning: {reconciliation.get('reasoning', 'N/A')}\n\n")
+
+                    logger.info(f"  Placement {i} (frame {frame_num}, step {current_step}): {final_action_desc}")
+
+                except Exception as e:
+                    logger.warning(f"  Pass 2c reconciliation failed for placement {i}: {e}")
+                    # Use Pass 2b result as fallback
                     action_data: Dict[str, Any] = {
                         "placement_index": i,
                         "frame_number": frame_num,
                         "timestamp": timestamp,
                         "frame_path": relative_frame_path,
                         "action_description": action_desc,
-                        "new_parts": result.get("new_parts_added", []),
-                        "spatial_position": result.get("spatial_position", {}),
+                        "new_parts": [new_part_detected] if new_part_detected else [],
+                        "spatial_position": spatial_position,
                         "box_2d": box_2d,
                         "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
                         "is_subassembly_switch": is_subassembly_switch,
                         "current_subassembly": self.subassembly_tracker.get_current_subassembly(),
                         "manual_step": current_step,
-                        "confidence": confidence
+                        "confidence": confidence,
+                        "reconciliation": {
+                            "error": str(e)
+                        }
                     }
                     validated_placements.append(action_data)
                     last_accepted_candidate = current_frame
 
-                    # Track parts usage and advance step if needed
-                    parts_used_in_current_step += 1
-                    step_data = parts_by_step.get(current_step, {})
-                    expected_parts_count = step_data.get("total_individual_parts", 0)
-                    if parts_used_in_current_step >= expected_parts_count and expected_parts_count > 0:
-                        logger.info(f"  Step {current_step} complete ({parts_used_in_current_step}/{expected_parts_count} parts placed), advancing to step {current_step + 1}")
-                        current_step += 1
-                        parts_used_in_current_step = 0
+                    # Log failure
+                    with open(comparison_log_path, "a", encoding="utf-8") as log_file:
+                        log_file.write("VLM PASS 2c - RECONCILIATION:\n")
+                        log_file.write(f"  ERROR: {str(e)}\n\n")
 
-                    # Write cache incrementally
-                    self._write_validated_placements_cache(
-                        manual_id, video_id, validated_placements, len(placement_candidates)
-                    )
+                    logger.info(f"  Placement {i} (frame {frame_num}, step {current_step}): {action_desc} (reconciliation failed)")
 
-                    new_calls += 1
-                    logger.info(f"  Placement {i} (frame {frame_num}, step {current_step}): {action_desc}")
-                else:
-                    logger.info(f"  Placement {i} (frame {frame_num}): no action description")
+                # Track parts usage and advance step if needed
+                parts_used_in_current_step += 1
+                expected_parts_count = step_data.get("total_individual_parts", 0)
+                if parts_used_in_current_step >= expected_parts_count and expected_parts_count > 0:
+                    logger.info(f"  Step {current_step} complete ({parts_used_in_current_step}/{expected_parts_count} parts placed), advancing to step {current_step + 1}")
+                    current_step += 1
+                    parts_used_in_current_step = 0
+
+                # Write cache incrementally
+                self._write_validated_placements_cache(
+                    manual_id, video_id, validated_placements, len(placement_candidates)
+                )
+
+                new_calls += 1
 
             except Exception as e:
                 logger.error(f"Failed to validate placement frame {frame_num}: {e}")
@@ -1203,24 +1678,28 @@ class VideoEnhancerV2:
 
     # ── VLM Pass 3: Per-Placement Reconciliation ─────────────────────────────
 
-    async def _reconcile_single_placement(
+    async def _pass2c_reconcile_all_sources(
         self,
+        pass2a_result: Dict[str, Any],
+        pass2b_result: Dict[str, Any],
         placement: Dict[str, Any],
         expected_parts: List[Dict[str, Any]],
         step_number: int,
         manual_id: str
     ) -> Dict[str, Any]:
         """
-        Reconcile a single placement against expected parts using VLM analysis.
+        Pass 2c: Reconcile Pass 2a + Pass 2b + expected parts to determine final part identity.
 
         Args:
-            placement: Single validated placement with annotated_frame_path
+            pass2a_result: Result from Pass 2a action analysis
+            pass2b_result: Result from Pass 2b SAM3 comparison
+            placement: Placement metadata with annotated_frame_path and box_2d
             expected_parts: List of expected parts for the current step
             step_number: Current manual step number
             manual_id: Manual identifier for loading images
 
         Returns:
-            Reconciliation result with verified part information
+            Reconciliation result with final part identification
         """
         # Build content for VLM call
         content: List[Dict[str, Any]] = []
@@ -1314,18 +1793,7 @@ class VideoEnhancerV2:
                         except Exception as e:
                             logger.warning(f"Could not load part image {part_img_path}: {e}")
 
-        # 4. Build placement metadata JSON
-        placement_metadata = {
-            "placement_index": placement["placement_index"],
-            "frame_number": placement["frame_number"],
-            "timestamp": placement["timestamp"],
-            "video_detected_parts": placement.get("new_parts", []),
-            "action_description": placement.get("action_description", ""),
-            "spatial_position": placement.get("spatial_position", {}),
-            "confidence": placement.get("confidence", 0.0)
-        }
-
-        # 5. Build expected parts JSON (without images)
+        # 4. Build expected parts JSON (without images)
         expected_parts_json = [
             {
                 "description": part["description"],
@@ -1334,9 +1802,11 @@ class VideoEnhancerV2:
             for part in expected_parts
         ]
 
-        # 6. Build prompt from template
-        prompt = self.placement_reconciliation_template.replace(
-            "{placement_metadata}", json.dumps(placement_metadata, indent=2)
+        # 5. Build prompt from template with all three sources
+        prompt = self.pass2c_template.replace(
+            "{pass2a_result}", json.dumps(pass2a_result, indent=2)
+        ).replace(
+            "{pass2b_result}", json.dumps(pass2b_result, indent=2)
         ).replace(
             "{expected_parts}", json.dumps(expected_parts_json, indent=2)
         ).replace(
@@ -1613,3 +2083,6 @@ class VideoEnhancerV2:
 
     def _get_default_action_frame_analysis_prompt(self) -> str:
         return "Analyze action frames to identify what LEGO part is being manipulated. Return JSON with part_being_manipulated, color, part_type, size, action_type (pickup/adjustment), confidence, and reasoning."
+
+    def _get_default_unified_placement_analysis_prompt(self) -> str:
+        return "Analyze the sequence of frames (previous placement → action frames → current placement) to determine if a new part was added. Return JSON with has_new_part, is_duplicate, what_changed, new_parts_added (with stud_count), action_description, spatial_position, box_2d, consistent_with_sequence, confidence, and reasoning."
