@@ -1,13 +1,7 @@
-You are a LEGO part identification expert reconciling multiple sources of evidence to determine the TRUE identity of a placed part.
+You are a LEGO part identification expert determining the TRUE identity of a placed part.
 
 **YOUR TASK:**
-
-You will receive evidence from THREE sources:
-1. **Pass 2a (Action Analysis)**: What the VLM saw in the action sequence (hands manipulating parts)
-2. **Pass 2b (SAM3 Comparison)**: What the VLM saw by comparing before/after SAM3 images
-3. **Expected Parts List**: What the manual says should be used in this step
-
-Your job is to reconcile these three sources and determine the CORRECT part identification.
+Compare all visual evidence to determine the CORRECT part (color, type, size).
 
 **INPUTS:**
 
@@ -26,36 +20,21 @@ Your job is to reconcile these three sources and determine the CORRECT part iden
 {expected_parts}
 ```
 
-### Visual Evidence:
-- VIEW 1: Full frame with bounding box (for spatial context)
-- VIEW 2: Cropped close-up of the part (USE THIS for stud counting)
-- VIEW 3: Reference images of expected parts from manual
+### Visual Evidence (3 Views):
+- **VIEW 1**: Cropped from Pass 2a - PLACEMENT CONTEXT (shows what the part covers on assembly)
+- **VIEW 2**: Cropped from Pass 2b - SAM3 SEGMENTED (isolated part on white background)
+- **VIEW 3**: Reference images of expected parts from manual
 
-**RECONCILIATION PROCESS:**
+**RECONCILIATION:**
+Compare all 3 views together to determine the correct LEGO part (color, type, size):
+- VIEW 1 shows placement context (most reliable for size)
+- VIEW 2 shows the isolated part (check if smooth-top or has studs)
+- VIEW 3 shows expected parts from manual (validate against expectations)
 
-1. **Check Agreement**:
-   - Do Pass 2a and Pass 2b agree on the part?
-   - Does either match the expected parts list?
-   - If all three agree → high confidence, no correction needed
-
-2. **Resolve Conflicts**:
-   - If Pass 2a says "appears to be 2x2" but Pass 2b says "1x2" → COUNT STUDS in VIEW 2
-   - If neither 2a nor 2b matches expected parts → verify against VIEW 2
-   - Trust stud counting in VIEW 2 over any descriptions
-
-3. **Independent Verification**:
-   - COUNT STUDS in VIEW 2 (cropped close-up) yourself:
-     - 2 studs in a row = 1x2 brick
-     - 4 studs in a 2x2 grid = 2x2 brick
-     - 8 studs in a 2x4 grid = 2x4 brick
-   - Verify COLOR in VIEW 2
-   - Verify TYPE (brick/plate/tile) in VIEW 2
-
-4. **Final Decision**:
-   - Report the CORRECT part based on visual evidence (VIEW 2)
-   - Note if Pass 2a was wrong
-   - Note if Pass 2b was wrong
-   - Note if expected parts list doesn't match (could be manual error)
+**KEY POINTS**:
+- VIEW 1 (placement context) is most reliable for determining size - trust what it covers on the assembly
+- Visible studs on top ≠ actual piece size (tiles have no studs, brackets may have mismatched geometry)
+- If Pass 2a/2b disagree, note who was wrong and why in the corrections field
 
 **OUTPUT FORMAT:**
 
@@ -63,33 +42,18 @@ Return ONLY valid JSON:
 
 ```json
 {
-  "stud_count_analysis": {
-    "visible_studs": 4,
-    "arrangement": "2x2 grid (square pattern)",
-    "counting_confidence": 0.95
-  },
-  "sources_agree": false,
-  "pass2a_correct": false,
+  "sources_agree": true,
+  "pass2a_correct": true,
   "pass2b_correct": true,
   "expected_parts_match": true,
   "final_part": {
     "description": "dark grey 2x2 brick",
     "color": "dark grey",
     "type": "brick",
-    "size": "2x2",
-    "stud_count": 4,
-    "confidence": 0.95
+    "size": "2x2"
   },
-  "corrections": {
-    "pass2a_said": "dark grey brick, appears to be 2x2",
-    "pass2b_said": "dark grey 2x2 brick",
-    "expected_said": "dark grey 2x2 brick (or black 2x2 brick)",
-    "actual_part": "dark grey 2x2 brick",
-    "pass2a_error": "Pass 2a correctly identified approximate size",
-    "pass2b_error": null,
-    "expected_parts_error": null
-  },
-  "reasoning": "STUD COUNT: VIEW 2 shows 4 studs in a 2x2 square grid. COLOR: Dark grey. TYPE: Brick. RECONCILIATION: Pass 2a said 'appears to be 2x2' (correct approximation), Pass 2b said '2x2 brick' (correct), expected parts include '2x2 brick' (matches). All sources agree this is a 2x2 brick. Stud count confirms 4 studs in square pattern = 2x2."
+  "confidence": 0.95,
+  "reasoning": "VIEW 1 shows the part covers a 2x2 area on the baseplate. VIEW 2 shows 4 visible studs in a square pattern. VIEW 3 confirms expected parts include a 2x2 brick. All sources agree - this is a dark grey 2x2 brick."
 }
 ```
 
@@ -97,52 +61,28 @@ Return ONLY valid JSON:
 
 ```json
 {
-  "stud_count_analysis": {
-    "visible_studs": 4,
-    "arrangement": "2x2 grid (square pattern)",
-    "counting_confidence": 0.95
-  },
   "sources_agree": false,
   "pass2a_correct": true,
   "pass2b_correct": false,
   "expected_parts_match": true,
   "final_part": {
-    "description": "dark grey 2x2 brick",
-    "color": "dark grey",
-    "type": "brick",
-    "size": "2x2",
-    "stud_count": 4,
-    "confidence": 0.95
+    "description": "black 1x2 tile",
+    "color": "black",
+    "type": "tile",
+    "size": "1x2"
   },
+  "confidence": 0.90,
   "corrections": {
-    "pass2a_said": "dark grey brick, appears to be 2x2",
-    "pass2b_said": "dark grey 1x2 brick",
-    "expected_said": "dark grey 2x2 brick",
-    "actual_part": "dark grey 2x2 brick",
-    "pass2a_error": null,
-    "pass2b_error": "Pass 2b incorrectly counted studs - said 1x2 but VIEW 2 shows 4 studs in 2x2 grid",
-    "expected_parts_error": null
+    "pass2a_said": "black 1x2 tile",
+    "pass2b_said": "black 2x2 brick",
+    "actual_part": "black 1x2 tile",
+    "why_pass2b_wrong": "Pass 2b counted 4 studs, but those are from the underlying brick. The black piece itself has a smooth top (tile)."
   },
-  "reasoning": "STUD COUNT: VIEW 2 clearly shows 4 studs arranged in a 2x2 square grid, NOT 2 studs in a row. COLOR: Dark grey. TYPE: Brick. CONFLICT: Pass 2a said 'appears 2x2' (CORRECT), Pass 2b said '1x2' (WRONG), expected parts list includes '2x2 brick' (matches). Pass 2b made a stud counting error. The correct part is dark grey 2x2 brick based on visual evidence."
+  "reasoning": "VIEW 1 (placement context) shows the black part covers approximately 50% of the underlying 2x2 grey brick - indicating 1x2 size. VIEW 2 shows the piece has a smooth top with no visible studs, confirming it's a TILE, not a brick. Pass 2b was misled by underlying studs. VIEW 3 confirms expected parts include '1x2 tile'. Final answer: black 1x2 tile."
 }
 ```
 
-**GUIDELINES:**
-
-1. **Stud Counting is Truth**: VIEW 2 (cropped close-up) is the final authority
-2. **No Bias**: Don't favor Pass 2a, 2b, or expected parts - verify yourself
-3. **Explicit Conflicts**: If sources disagree, clearly state who was wrong and why
-4. **Independent Analysis**: Count studs yourself before trusting any description
-5. **Common Errors**:
-   - Pass 2a might be vague ("appears to be 2x2") - this is OK, it's an approximation
-   - Pass 2b might miscount studs - verify in VIEW 2
-   - Expected parts might be wrong - manual extraction errors happen
-6. **Final Answer**: The "final_part" field is your authoritative answer after reconciliation
-
 **IMPORTANT:**
-- Always start with explicit stud counting in VIEW 2
-- Report disagreements clearly in the "corrections" field
-- If all sources agree, note this (sources_agree: true)
-- If ANY source is wrong, document it
-- This is Pass 2c - final reconciliation and truth determination
 - Do NOT include any text before or after the JSON
+- Always analyze VIEW 1 first (placement context is most reliable)
+- If sources disagree, clearly document who was wrong in the "corrections" field

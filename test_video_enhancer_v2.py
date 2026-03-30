@@ -48,6 +48,9 @@ def clear_cache(settings, manual_id: str, video_id: str):
         # SAM3 segmented frames
         (processed_dir / f"sam3_segmented_{video_id}", "SAM3 segmented frames"),
 
+        # SAM3 annotated frames with bounding boxes
+        (processed_dir / f"sam3_annotated_{video_id}", "SAM3 annotated frames"),
+
         # Annotated frames from placement validation
         (processed_dir / f"validated_placement_annotated_{video_id}", "Validated placement annotated frames"),
 
@@ -90,6 +93,7 @@ async def main():
     manual_id = "111111"
     video_id = "changi_airport"
     max_frames = 1000  # Limit to first 1000 frames for faster testing
+    #max_frames = None  # Process entire video
 
     # Initialize settings
     settings = get_settings()

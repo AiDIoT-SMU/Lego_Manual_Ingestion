@@ -312,11 +312,20 @@ class VideoEnhancerV2:
         # Load prompts
         prompts_dir = Path("prompts")
 
-        frame_quality_path = prompts_dir / "video_frame_quality.txt"
-        self.frame_quality_template = (
-            frame_quality_path.read_text()
-            if frame_quality_path.exists()
-            else self._get_default_frame_quality_prompt()
+        # Load Pass 1a prompt (frame classification with temporal context)
+        pass1a_path = prompts_dir / "video_pass1a_classification.txt"
+        self.pass1a_template = (
+            pass1a_path.read_text()
+            if pass1a_path.exists()
+            else self._get_default_frame_quality_prompt()  # Fallback to old prompt
+        )
+
+        # Load Pass 1b prompt (quality filtering)
+        pass1b_path = prompts_dir / "video_pass1b_quality_filter.txt"
+        self.pass1b_template = (
+            pass1b_path.read_text()
+            if pass1b_path.exists()
+            else ""
         )
 
         # Load Pass 2a prompt (action analysis)
@@ -340,6 +349,14 @@ class VideoEnhancerV2:
         self.pass2c_template = (
             pass2c_path.read_text()
             if pass2c_path.exists()
+            else ""
+        )
+
+        # Load Pass 2d prompt (step completion verification)
+        pass2d_path = prompts_dir / "video_pass2d_step_completion.txt"
+        self.pass2d_template = (
+            pass2d_path.read_text()
+            if pass2d_path.exists()
             else ""
         )
 
@@ -367,14 +384,17 @@ class VideoEnhancerV2:
         max_frames: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Run the full 4-pass pipeline and return the video_enhanced.json structure.
+        Run the full 3-pass pipeline and return the video_enhanced.json structure.
 
         Pipeline:
         1. Extract frames from video (denser sampling: every 5 frames).
         2. VLM Pass 1: Classify frames with quality metrics → placement candidates.
         3. VLM Pass 2: Validate placements with context from enhanced.json + detect duplicates.
-        4. VLM Pass 3: Per-placement reconciliation using annotated frames + reference images.
-        5. VLM Pass 4: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
+           - Pass 2a: Action analysis (what action is being performed?)
+           - Pass 2b: SAM3 comparison (what changed in segmented images?)
+           - Pass 2c: Reconciliation (combine 2a + 2b + expected parts)
+           - Pass 2d: Step completion verification (is step complete?)
+        4. VLM Pass 3: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
 
         Args:
             manual_id: Manual identifier
@@ -413,22 +433,11 @@ class VideoEnhancerV2:
             manual_id, video_id, validated_placements, len(placement_candidates)
         )
 
-        # === VLM PASS 3: Per-Placement Reconciliation ===
-        logger.info("VLM Pass 3: Reconciling each placement against expected parts...")
-        reconciled_placements = await self._reconcile_placements_individually(
-            manual_id, video_id, validated_placements_data, manual_data
-        )
-        logger.info(f"Pass 3 complete: {len(reconciled_placements.get('placements', []))} placements reconciled")
-
-        # Write reconciled placements cache
-        reconciled_data = self._write_reconciled_placements_cache(
-            manual_id, video_id, reconciled_placements
-        )
-
-        # === VLM PASS 4: Atomic Sub-step Generation ===
-        logger.info("VLM Pass 4: Generating atomic sub-steps from reconciled placements...")
+        # === VLM PASS 3: Atomic Sub-step Generation ===
+        # Note: Reconciliation is already done in Pass 2c during validation
+        logger.info("VLM Pass 3: Generating atomic sub-steps from validated placements...")
         enhanced_manual = await self._generate_atomic_substeps(
-            manual_id, video_id, reconciled_data, manual_data, frames
+            manual_id, video_id, validated_placements_data, manual_data, frames
         )
 
         logger.info(f"Video enhancement V2 complete: {len(enhanced_manual['steps'])} steps enhanced")
@@ -478,10 +487,12 @@ class VideoEnhancerV2:
         video_id: str
     ) -> List[Dict[str, Any]]:
         """
-        VLM Pass 1: Classify frames as irrelevant/action/placement_candidate with quality metrics.
+        VLM Pass 1: Two-stage frame classification.
 
-        Uses batched VLM calls (8-15 frames per call) to reduce API costs.
-        Also applies OpenCV quality filtering before VLM analysis.
+        Pass 1a: Classify frames (action vs placement_candidate) using temporal context
+        Pass 1b: Filter placement candidates for quality (assembly visibility)
+
+        Uses batched VLM calls (8 frames per call) to reduce API costs.
         Results are cached to video_frame_quality_{video_id}.json.
         """
         # Load cache
@@ -494,6 +505,22 @@ class VideoEnhancerV2:
         cache: Dict[str, Any] = (
             json.loads(cache_path.read_text()) if cache_path.exists() else {}
         )
+
+        # Initialize Pass 1 reasoning log file
+        pass1_log_dir = self.settings.data_dir / "processed" / manual_id / f"vlm_reasoning_logs_{video_id}"
+        pass1_log_dir.mkdir(parents=True, exist_ok=True)
+        pass1_log_path = pass1_log_dir / "pass1_classification_reasoning.log"
+
+        # Clear/create new log file at the start
+        with open(pass1_log_path, "w", encoding="utf-8") as log_file:
+            log_file.write("=" * 100 + "\n")
+            log_file.write("VLM PASS 1 CLASSIFICATION REASONING LOG\n")
+            log_file.write(f"Manual ID: {manual_id}\n")
+            log_file.write(f"Video ID: {video_id}\n")
+            log_file.write(f"Total frames to classify: {len(frames)}\n")
+            log_file.write("=" * 100 + "\n\n")
+
+        logger.info(f"  Pass 1 reasoning log will be written to: {pass1_log_path}")
 
         # Separate cached vs uncached
         cached_frames, uncached_frames = self._separate_cached_frames(frames, cache)
@@ -530,90 +557,50 @@ class VideoEnhancerV2:
                 f"batches of {batch_size}"
             )
 
-            # Process each batch
+            # === VLM PASS 1a: Frame Classification (action vs placement) ===
+            logger.info(f"  VLM Pass 1a: Classifying {len(uncached_frames)} frames using temporal context...")
+            pass1a_placement_candidates = []
+
             for batch_idx, batch in enumerate(batches):
                 try:
-                    results = self._classify_frame_batch_with_quality(batch)
+                    results = self._pass1a_classify_batch(batch)
 
-                    # Process results and update cache
+                    # Count placement candidates in this batch
+                    batch_placements = []
+
+                    # Process results
                     for (frame_num, frame_path), result in zip(batch, results):
-                        timestamp = frame_num / 30.0
                         is_relevant = result.get("is_relevant", True)
                         frame_type = result.get("frame_type") if is_relevant else None
-                        quality_score = result.get("quality_score", 0.0)
-                        has_hand_obstruction = result.get("has_hand_obstruction", False)
                         is_stable = result.get("is_stable", True)
                         confidence = result.get("confidence", 0.0)
 
-                        # Update cache
-                        cache[str(frame_num)] = {
-                            "is_relevant": is_relevant,
-                            "frame_type": frame_type,
-                            "quality_score": quality_score,
-                            "has_hand_obstruction": has_hand_obstruction,
-                            "is_stable": is_stable,
-                            "confidence": confidence
-                        }
-
-                        # Add to newly classified if relevant and decent quality
-                        # Only accept placement_candidates with good quality
+                        # Store Pass 1a result
                         if is_relevant and frame_type == "placement_candidate":
-                            # Strict quality filtering for placement candidates
-                            if (quality_score >= 0.5 and
-                                not has_hand_obstruction and
-                                is_stable):
-                                newly_classified.append({
-                                    "frame_number": frame_num,
-                                    "frame_path": frame_path,
-                                    "timestamp": timestamp,
-                                    "frame_type": frame_type,
-                                    "quality_score": quality_score,
-                                    "confidence": confidence
-                                })
-                            else:
-                                reasons = []
-                                if quality_score < 0.5:
-                                    reasons.append(f"low quality ({quality_score:.2f})")
-                                if has_hand_obstruction:
-                                    reasons.append("hand obstruction")
-                                if not is_stable:
-                                    reasons.append("unstable")
-                                logger.debug(
-                                    f"  Frame {frame_num} classified as placement_candidate "
-                                    f"but rejected due to: {', '.join(reasons)}"
-                                )
+                            pass1a_placement_candidates.append((frame_num, frame_path, result))
+                            batch_placements.append(frame_num)
                         elif is_relevant:
-                            # Include action frames regardless of quality
+                            # Action frames go directly to final list
+                            timestamp = frame_num / 30.0
                             newly_classified.append({
                                 "frame_number": frame_num,
                                 "frame_path": frame_path,
                                 "timestamp": timestamp,
                                 "frame_type": frame_type,
-                                "quality_score": quality_score,
+                                "quality_score": 0.5,  # Default for action frames
                                 "confidence": confidence
                             })
 
-                    # Write cache after each batch
-                    cache_path.write_text(json.dumps(cache, indent=2))
-
                     logger.info(
-                        f"  Batch {batch_idx + 1}/{len(batches)}: "
-                        f"classified {len(batch)} frames"
+                        f"    Pass 1a - Batch {batch_idx + 1}/{len(batches)}: "
+                        f"Found {len(batch_placements)} placement candidates: {batch_placements}"
                     )
 
                 except Exception as e:
-                    logger.error(f"Failed to classify batch {batch_idx + 1}: {e}")
-                    # Fallback: treat all frames in batch as action frames
+                    logger.error(f"Failed to classify batch {batch_idx + 1} in Pass 1a: {e}")
+                    # Fallback: treat all frames as action
                     for frame_num, frame_path in batch:
                         timestamp = frame_num / 30.0
-                        cache[str(frame_num)] = {
-                            "is_relevant": True,
-                            "frame_type": "action",
-                            "quality_score": 0.0,
-                            "has_hand_obstruction": True,
-                            "is_stable": False,
-                            "confidence": 0.0
-                        }
                         newly_classified.append({
                             "frame_number": frame_num,
                             "frame_path": frame_path,
@@ -622,7 +609,135 @@ class VideoEnhancerV2:
                             "quality_score": 0.0,
                             "confidence": 0.0
                         })
-                    cache_path.write_text(json.dumps(cache, indent=2))
+
+            # Log Pass 1a results
+            with open(pass1_log_path, "a", encoding="utf-8") as log_file:
+                log_file.write("=" * 100 + "\n")
+                log_file.write("VLM PASS 1a - FRAME CLASSIFICATION (action vs placement_candidate)\n")
+                log_file.write("=" * 100 + "\n\n")
+                log_file.write(f"Total frames analyzed: {len(uncached_frames)}\n")
+                log_file.write(f"Placement candidates found: {len(pass1a_placement_candidates)}\n")
+                log_file.write(f"Action frames found: {len([f for f in newly_classified if f.get('frame_type') == 'action'])}\n\n")
+
+                if pass1a_placement_candidates:
+                    log_file.write("PLACEMENT CANDIDATES:\n")
+                    for frame_num, frame_path, result in pass1a_placement_candidates:
+                        log_file.write(f"\n  Frame {frame_num} (timestamp: {frame_num / 30.0:.2f}s):\n")
+                        log_file.write(f"    Path: {frame_path}\n")
+                        log_file.write(f"    frame_type: {result.get('frame_type', 'N/A')}\n")
+                        log_file.write(f"    is_stable: {result.get('is_stable', 'N/A')}\n")
+                        log_file.write(f"    confidence: {result.get('confidence', 0.0):.2f}\n")
+                        log_file.write(f"    reasoning: {result.get('reasoning', 'N/A')}\n")
+                log_file.write("\n")
+
+            # === VLM PASS 1b: Quality Filtering (assembly visibility) ===
+            if pass1a_placement_candidates:
+                logger.info(
+                    f"  VLM Pass 1b: Filtering {len(pass1a_placement_candidates)} placement candidates "
+                    f"for assembly visibility..."
+                )
+
+                # Create batches for Pass 1b
+                pass1b_batches = self._create_batches(
+                    [(num, path) for num, path, _ in pass1a_placement_candidates],
+                    batch_size
+                )
+
+                for batch_idx, batch in enumerate(pass1b_batches):
+                    try:
+                        filter_results = self._pass1b_filter_batch(batch)
+
+                        # Count accepted frames
+                        batch_accepted = []
+                        batch_rejected = []
+
+                        # Process filter results
+                        for (frame_num, frame_path), filter_result in zip(batch, filter_results):
+                            timestamp = frame_num / 30.0
+                            accept = filter_result.get("accept", False)
+                            quality_score = filter_result.get("quality_score", 0.0)
+                            has_hand_obstruction = filter_result.get("has_hand_obstruction", False)
+                            confidence = filter_result.get("confidence", 0.0)
+
+                            # Update cache
+                            cache[str(frame_num)] = {
+                                "is_relevant": True,
+                                "frame_type": "placement_candidate" if accept else "action",
+                                "quality_score": quality_score,
+                                "has_hand_obstruction": has_hand_obstruction,
+                                "is_stable": True,
+                                "confidence": confidence,
+                                "pass1b_accepted": accept
+                            }
+
+                            if accept:
+                                newly_classified.append({
+                                    "frame_number": frame_num,
+                                    "frame_path": frame_path,
+                                    "timestamp": timestamp,
+                                    "frame_type": "placement_candidate",
+                                    "quality_score": quality_score,
+                                    "confidence": confidence
+                                })
+                                batch_accepted.append(frame_num)
+                            else:
+                                batch_rejected.append(frame_num)
+
+                        logger.info(
+                            f"    Pass 1b - Batch {batch_idx + 1}/{len(pass1b_batches)}: "
+                            f"Accepted {len(batch_accepted)} frames {batch_accepted}, "
+                            f"Rejected {len(batch_rejected)} frames {batch_rejected}"
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to filter batch {batch_idx + 1} in Pass 1b: {e}")
+                        # Fallback: accept all frames in batch
+                        for frame_num, frame_path in batch:
+                            timestamp = frame_num / 30.0
+                            newly_classified.append({
+                                "frame_number": frame_num,
+                                "frame_path": frame_path,
+                                "timestamp": timestamp,
+                                "frame_type": "placement_candidate",
+                                "quality_score": 0.5,
+                                "confidence": 0.5
+                            })
+
+                # Write cache after Pass 1b
+                cache_path.write_text(json.dumps(cache, indent=2))
+
+                # Log Pass 1b results
+                with open(pass1_log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write("=" * 100 + "\n")
+                    log_file.write("VLM PASS 1b - QUALITY FILTERING (assembly visibility)\n")
+                    log_file.write("=" * 100 + "\n\n")
+                    log_file.write(f"Total placement candidates from Pass 1a: {len(pass1a_placement_candidates)}\n")
+
+                    # Count accepted and rejected
+                    accepted_frames = [f for f in newly_classified if f.get('frame_type') == 'placement_candidate']
+                    rejected_count = len(pass1a_placement_candidates) - len(accepted_frames)
+                    log_file.write(f"ACCEPTED frames: {len(accepted_frames)}\n")
+                    log_file.write(f"REJECTED frames: {rejected_count}\n\n")
+
+                    # Log each frame's Pass 1b result
+                    for frame_num, frame_path, pass1a_result in pass1a_placement_candidates:
+                        cache_entry = cache.get(str(frame_num), {})
+                        accepted = cache_entry.get("pass1b_accepted", False)
+                        log_file.write(f"\n  Frame {frame_num} (timestamp: {frame_num / 30.0:.2f}s):\n")
+                        log_file.write(f"    Path: {frame_path}\n")
+                        log_file.write(f"    VERDICT: {'ACCEPTED' if accepted else 'REJECTED'}\n")
+                        log_file.write(f"    quality_score: {cache_entry.get('quality_score', 0.0):.2f}\n")
+                        log_file.write(f"    has_hand_obstruction: {cache_entry.get('has_hand_obstruction', False)}\n")
+                        log_file.write(f"    confidence: {cache_entry.get('confidence', 0.0):.2f}\n")
+                    log_file.write("\n")
+            else:
+                logger.info("  VLM Pass 1b: No placement candidates to filter")
+                # Log empty Pass 1b
+                with open(pass1_log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write("=" * 100 + "\n")
+                    log_file.write("VLM PASS 1b - QUALITY FILTERING (assembly visibility)\n")
+                    log_file.write("=" * 100 + "\n\n")
+                    log_file.write("No placement candidates to filter from Pass 1a\n\n")
 
         # Merge cached + newly classified
         all_classified = cached_frames + newly_classified
@@ -631,12 +746,36 @@ class VideoEnhancerV2:
         all_classified.sort(key=lambda x: x["frame_number"])
 
         placement_count = sum(1 for f in all_classified if f["frame_type"] == "placement_candidate")
+        action_count = len(all_classified) - placement_count
+        irrelevant_count = len(frames) - len(all_classified)
+
         logger.info(
             f"Pass 1 summary: {len(all_classified)} relevant, "
             f"{placement_count} placement candidates, "
-            f"{len(all_classified) - placement_count} action, "
-            f"{len(frames) - len(all_classified)} irrelevant"
+            f"{action_count} action, "
+            f"{irrelevant_count} irrelevant"
         )
+
+        # Write final summary to log
+        with open(pass1_log_path, "a", encoding="utf-8") as log_file:
+            log_file.write("=" * 100 + "\n")
+            log_file.write("PASS 1 FINAL SUMMARY\n")
+            log_file.write("=" * 100 + "\n\n")
+            log_file.write(f"Total frames processed: {len(frames)}\n")
+            log_file.write(f"Frames from cache: {len(cached_frames)}\n")
+            log_file.write(f"Newly classified frames: {len(newly_classified)}\n\n")
+            log_file.write(f"CLASSIFICATION RESULTS:\n")
+            log_file.write(f"  Placement candidates: {placement_count}\n")
+            log_file.write(f"  Action frames: {action_count}\n")
+            log_file.write(f"  Irrelevant frames: {irrelevant_count}\n\n")
+
+            # List all placement candidates
+            if placement_count > 0:
+                log_file.write("FINAL PLACEMENT CANDIDATES:\n")
+                placement_frames = [f for f in all_classified if f["frame_type"] == "placement_candidate"]
+                for f in placement_frames:
+                    log_file.write(f"  Frame {f['frame_number']} (timestamp: {f['timestamp']:.2f}s, quality: {f.get('quality_score', 0.0):.2f}, confidence: {f.get('confidence', 0.0):.2f})\n")
+            log_file.write("\n")
 
         return all_classified
 
@@ -682,19 +821,19 @@ class VideoEnhancerV2:
             batches.append(batch)
         return batches
 
-    def _classify_frame_batch_with_quality(
+    def _pass1a_classify_batch(
         self,
         batch: List[tuple[int, Path]]
     ) -> List[Dict[str, Any]]:
         """
-        Classify a batch of frames with quality metrics using a single VLM call.
+        VLM Pass 1a: Classify a batch of frames (action vs placement) using temporal context.
 
         Returns list of classification results in same order as batch.
         """
         # Build multi-image content payload
         content = []
 
-        # Add frames in order
+        # Add frames in chronological order
         for idx, (frame_num, frame_path) in enumerate(batch):
             frame_img = _resize_image(str(frame_path), width=600)
             frame_b64 = _image_to_b64(frame_img)
@@ -708,8 +847,8 @@ class VideoEnhancerV2:
                 "image_url": {"url": f"data:image/png;base64,{frame_b64}"}
             })
 
-        # Add prompt at end
-        content.append({"type": "text", "text": self.frame_quality_template})
+        # Add Pass 1a prompt at end
+        content.append({"type": "text", "text": self.pass1a_template})
 
         messages = [{"role": "user", "content": content}]
 
@@ -759,6 +898,80 @@ class VideoEnhancerV2:
                 entry.setdefault("has_hand_obstruction", False)
                 entry.setdefault("is_stable", True)
                 entry.setdefault("confidence", 0.0)
+
+        return result
+
+    def _pass1b_filter_batch(
+        self,
+        batch: List[tuple[int, Path]]
+    ) -> List[Dict[str, Any]]:
+        """
+        VLM Pass 1b: Filter placement candidates for quality (assembly visibility).
+
+        Returns list of filter results in same order as batch.
+        """
+        # Build multi-image content payload
+        content = []
+
+        # Add frames in order
+        for idx, (frame_num, frame_path) in enumerate(batch):
+            frame_img = _resize_image(str(frame_path), width=600)
+            frame_b64 = _image_to_b64(frame_img)
+
+            content.append({
+                "type": "text",
+                "text": f"FRAME {idx + 1} of {len(batch)} (frame_number={frame_num}):"
+            })
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{frame_b64}"}
+            })
+
+        # Add Pass 1b prompt at end
+        content.append({"type": "text", "text": self.pass1b_template})
+
+        messages = [{"role": "user", "content": content}]
+
+        # Make VLM call with retry
+        raw = self.vlm._litellm_with_retry(messages)
+        result = _parse_json(raw)
+
+        # Validate response is an array
+        if not isinstance(result, list):
+            raise ValueError(f"Expected array response, got {type(result)}")
+
+        # Validate count matches
+        if len(result) != len(batch):
+            logger.warning(
+                f"Pass 1b batch size mismatch: sent {len(batch)} frames, "
+                f"got {len(result)} results. Attempting to recover..."
+            )
+            # Pad or truncate to match
+            while len(result) < len(batch):
+                result.append({
+                    "accept": True,  # Default to accepting
+                    "quality_score": 0.5,
+                    "has_hand_obstruction": False,
+                    "confidence": 0.5,
+                    "reasoning": "Fallback due to incomplete batch response"
+                })
+            if len(result) > len(batch):
+                result = result[:len(batch)]
+
+        # Ensure required fields
+        for idx, entry in enumerate(result):
+            if not isinstance(entry, dict):
+                result[idx] = {
+                    "accept": True,
+                    "quality_score": 0.5,
+                    "has_hand_obstruction": False,
+                    "confidence": 0.5
+                }
+            else:
+                entry.setdefault("accept", True)
+                entry.setdefault("quality_score", 0.5)
+                entry.setdefault("has_hand_obstruction", False)
+                entry.setdefault("confidence", 0.5)
 
         return result
 
@@ -1059,6 +1272,32 @@ class VideoEnhancerV2:
                 result["sam3_prev_path"] = sam3_prev_used
                 result["sam3_current_path"] = sam3_current_used
 
+                # Draw bounding box on SAM3 segmented frame if box_2d is provided
+                box_2d = result.get("box_2d")
+                if box_2d and sam3_current_used and result.get("has_new_part"):
+                    # Get the full SAM3 current path
+                    sam3_current_full_path = self.settings.data_dir / sam3_current_used
+
+                    # Get part description for label
+                    new_part = result.get("new_part_detected", {})
+                    part_desc = new_part.get("description", "new part") if isinstance(new_part, dict) else "new part"
+                    confidence = result.get("confidence", 0.0)
+
+                    # Draw annotated SAM3 frame
+                    annotated_sam3_dir = self.settings.data_dir / "processed" / manual_id / f"sam3_annotated_{video_id}"
+                    annotated_sam3_path = _draw_placement_bbox(
+                        frame_path=sam3_current_full_path,
+                        box_2d=box_2d,
+                        frame_num=current_frame_num,
+                        label=f"Pass 2b: {part_desc}",
+                        confidence=confidence,
+                        output_dir=annotated_sam3_dir
+                    )
+
+                    # Add annotated SAM3 path to result
+                    if annotated_sam3_path:
+                        result["sam3_annotated_path"] = str(annotated_sam3_path.relative_to(self.settings.data_dir))
+
             return result
 
         except Exception as e:
@@ -1284,6 +1523,7 @@ class VideoEnhancerV2:
                     log_file.write(f"    action_type: {pass2a_result.get('action_type', 'N/A')}\n")
                     log_file.write(f"    has_new_part: {pass2a_result.get('has_new_part', False)}\n")
                     log_file.write(f"    part_from_actions: {pass2a_result.get('part_from_actions', 'N/A')}\n")
+                    log_file.write(f"    box_2d (for original frame): {pass2a_result.get('box_2d', 'N/A')}\n")
                     log_file.write(f"    action_narrative: {pass2a_result.get('action_narrative', 'N/A')}\n")
                     log_file.write(f"    confidence: {pass2a_result.get('confidence', 0.0):.2f}\n")
                     log_file.write(f"    reasoning: {pass2a_result.get('reasoning', 'N/A')}\n\n")
@@ -1292,6 +1532,7 @@ class VideoEnhancerV2:
                     log_file.write("VLM PASS 2b - SAM3 COMPARISON:\n")
                     sam3_prev = pass2b_result.get('sam3_prev_path', None)
                     sam3_current = pass2b_result.get('sam3_current_path', None)
+                    sam3_annotated = pass2b_result.get('sam3_annotated_path', None)
                     log_file.write(f"  Comparing SAM3 segmented images:\n")
                     if sam3_prev:
                         log_file.write(f"    Previous (SAM3): {sam3_prev}\n")
@@ -1301,13 +1542,15 @@ class VideoEnhancerV2:
                         log_file.write(f"    Current (SAM3): {sam3_current}\n")
                     else:
                         log_file.write(f"    Current: SAM3 failed\n")
+                    if sam3_annotated:
+                        log_file.write(f"    Annotated (SAM3 with bbox): {sam3_annotated}\n")
                     log_file.write(f"\n  VLM Output:\n")
                     log_file.write(f"    is_duplicate: {pass2b_result.get('is_duplicate', False)}\n")
                     log_file.write(f"    has_new_part: {pass2b_result.get('has_new_part', False)}\n")
                     log_file.write(f"    what_changed: {pass2b_result.get('what_changed', 'N/A')}\n")
                     log_file.write(f"    new_part_detected: {pass2b_result.get('new_part_detected', 'N/A')}\n")
                     log_file.write(f"    spatial_position: {pass2b_result.get('spatial_position', {})}\n")
-                    log_file.write(f"    box_2d: {pass2b_result.get('box_2d', 'N/A')}\n")
+                    log_file.write(f"    box_2d (for SAM3 frame): {pass2b_result.get('box_2d', 'N/A')}\n")
                     log_file.write(f"    confidence: {pass2b_result.get('confidence', 0.0):.2f}\n")
                     log_file.write(f"    reasoning: {pass2b_result.get('reasoning', 'N/A')}\n\n")
 
@@ -1341,7 +1584,10 @@ class VideoEnhancerV2:
                 # Use Pass 2b's detected part info for now (will be reconciled by Pass 2c)
                 new_part_detected = pass2b_result.get("new_part_detected", {})
                 spatial_position = pass2b_result.get("spatial_position", {})
-                box_2d = pass2b_result.get("box_2d")
+                box_2d_sam3 = pass2b_result.get("box_2d")  # Box for SAM3 images
+
+                # Get bounding box from Pass 2a for original frame annotation
+                box_2d_original = pass2a_result.get("box_2d")  # Box for original frames
 
                 # Create preliminary action description from Pass 2b
                 if isinstance(new_part_detected, dict):
@@ -1363,23 +1609,31 @@ class VideoEnhancerV2:
                     # If not relative to data_dir, use absolute path
                     relative_frame_path = str(frame_path_obj)
 
-                # Draw annotated frame with bounding box from Pass 2b
-                annotated_frame_path = _draw_placement_bbox(
-                    frame_path=current_frame["frame_path"],
-                    box_2d=box_2d,
-                    frame_num=frame_num,
-                    label=action_desc,
-                    confidence=confidence,
-                    output_dir=self.settings.data_dir / "processed" / manual_id / f"validated_placement_annotated_{video_id}"
-                )
+                # Draw bounding box on original frame using Pass 2a's box_2d
+                # Pass 2a analyzes the original frames with hands, so its box coordinates are correct for original frames
+                # Pass 2b's box_2d is for SAM3 images (already annotated at line 1083)
+                annotated_frame_path = None
+                if box_2d_original:
+                    annotated_frame_path = _draw_placement_bbox(
+                        frame_path=current_frame["frame_path"],
+                        box_2d=box_2d_original,
+                        frame_num=frame_num,
+                        label=action_desc,
+                        confidence=confidence,
+                        output_dir=self.settings.data_dir / "processed" / manual_id / f"validated_placement_annotated_{video_id}"
+                    )
+                else:
+                    logger.debug(f"  Frame {frame_num}: Pass 2a did not provide box_2d for original frame")
 
                 # Prepare placement metadata for Pass 2c
+                # Pass 2c needs both box coordinates for correct cropping
                 placement_metadata: Dict[str, Any] = {
                     "placement_index": i,
                     "frame_number": frame_num,
                     "timestamp": timestamp,
                     "frame_path": relative_frame_path,
-                    "box_2d": box_2d,
+                    "box_2d_original": box_2d_original,  # Box for cropping original frame (from Pass 2a)
+                    "box_2d_sam3": box_2d_sam3,  # Box for cropping SAM3 frame (from Pass 2b)
                     "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
                 }
 
@@ -1416,7 +1670,8 @@ class VideoEnhancerV2:
                         "action_description": final_action_desc,  # Use Pass 2c's final result
                         "new_parts": [final_part] if final_part else [],
                         "spatial_position": spatial_position,
-                        "box_2d": box_2d,
+                        "box_2d": box_2d_original,  # Bounding box for original frame
+                        "box_2d_sam3": box_2d_sam3,  # Bounding box for SAM3 frame (for reference)
                         "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
                         "is_subassembly_switch": is_subassembly_switch,
                         "current_subassembly": self.subassembly_tracker.get_current_subassembly(),
@@ -1476,6 +1731,10 @@ class VideoEnhancerV2:
                             log_file.write(f"        location: {pass2b_spatial.get('location', 'N/A')}\n")
                             log_file.write(f"        reference_object: {pass2b_spatial.get('reference_object', 'N/A')}\n")
                         log_file.write(f"      box_2d: {pass2b_result.get('box_2d', 'N/A')}\n")
+                        # Show annotated SAM3 path if available
+                        sam3_annotated = pass2b_result.get('sam3_annotated_path')
+                        if sam3_annotated:
+                            log_file.write(f"      sam3_annotated: {sam3_annotated}\n")
 
                         log_file.write(f"\n    Expected Parts for Step {current_step}:\n")
                         log_file.write(f"      Total parts: {len(expected_parts_data)}\n")
@@ -1496,6 +1755,82 @@ class VideoEnhancerV2:
 
                     logger.info(f"  Placement {i} (frame {frame_num}, step {current_step}): {final_action_desc}")
 
+                    # === VLM PASS 2d: STEP COMPLETION VERIFICATION ===
+                    # Check if current step is complete and determine step advancement
+                    logger.debug(f"  Placement {i}: Pass 2d - Verifying step completion...")
+
+                    # Get SAM3 current path for comparison
+                    sam3_current_path = pass2b_result.get("sam3_current_path")
+
+                    # Extract subassembly image paths from step data
+                    # step_data["subassemblies"] is a list of dicts with structure: {"cropped_image_path": "...", "description": "...", "bounding_box": {...}}
+                    subassemblies_data = step_data.get("subassemblies", [])
+                    expected_subassembly_images = [
+                        sa.get("cropped_image_path", "")
+                        for sa in subassemblies_data
+                        if isinstance(sa, dict) and sa.get("cropped_image_path")
+                    ]
+
+                    if not expected_subassembly_images:
+                        logger.debug(f"  No expected subassembly images found for step {current_step}, skipping Pass 2d verification")
+                        parts_used_in_current_step += 1
+                        continue
+
+                    try:
+                        step_verification = await self._pass2d_verify_step_completion(
+                            current_sam3_path=sam3_current_path,
+                            step_number=current_step,
+                            expected_subassembly_images=expected_subassembly_images,
+                            expected_parts=expected_parts_data,
+                            manual_id=manual_id
+                        )
+
+                        # Store Pass 2d result in action_data
+                        action_data["step_verification"] = step_verification
+
+                        # Log Pass 2d verification
+                        with open(comparison_log_path, "a", encoding="utf-8") as log_file:
+                            log_file.write("VLM PASS 2d - STEP COMPLETION VERIFICATION:\n")
+                            log_file.write(f"  is_step_complete: {step_verification.get('is_step_complete', False)}\n")
+                            log_file.write(f"  current_step_verified: {step_verification.get('current_step_verified', current_step)}\n")
+                            log_file.write(f"  should_advance_to_step: {step_verification.get('should_advance_to_step', current_step)}\n")
+                            log_file.write(f"  confidence: {step_verification.get('confidence', 0.0)}\n")
+                            log_file.write(f"  reasoning: {step_verification.get('reasoning', 'N/A')}\n")
+                            discrepancies = step_verification.get('discrepancies')
+                            if discrepancies:
+                                log_file.write(f"  discrepancies: {json.dumps(discrepancies, indent=4)}\n")
+                            log_file.write("\n")
+
+                        # Determine step advancement based on Pass 2d result
+                        is_step_complete = step_verification.get("is_step_complete", False)
+                        should_advance_to_step = step_verification.get("should_advance_to_step", current_step)
+
+                        if is_step_complete and should_advance_to_step > current_step:
+                            logger.info(f"  Step {current_step} verified complete by Pass 2d, advancing to step {should_advance_to_step}")
+                            current_step = should_advance_to_step
+                            parts_used_in_current_step = 0
+                        else:
+                            # Track parts usage for fallback (in case verification doesn't trigger)
+                            parts_used_in_current_step += 1
+                            logger.debug(f"  Step {current_step} not yet complete ({parts_used_in_current_step} parts placed so far)")
+
+                    except Exception as e:
+                        logger.warning(f"  Pass 2d step verification failed: {e}. Falling back to part counting.")
+                        logger.debug(f"  Pass 2d error details:", exc_info=True)
+
+                        # Fallback to part counting if Pass 2d fails
+                        parts_used_in_current_step += 1
+                        expected_parts_count = step_data.get("total_individual_parts", 0)
+                        if parts_used_in_current_step >= expected_parts_count and expected_parts_count > 0:
+                            logger.info(f"  Step {current_step} complete by part count ({parts_used_in_current_step}/{expected_parts_count} parts placed), advancing to step {current_step + 1}")
+                            current_step += 1
+                            parts_used_in_current_step = 0
+
+                        # Log failure
+                        with open(comparison_log_path, "a", encoding="utf-8") as log_file:
+                            log_file.write("VLM PASS 2d - STEP COMPLETION VERIFICATION:\n")
+                            log_file.write(f"  ERROR: {str(e)}\n\n")
+
                 except Exception as e:
                     logger.warning(f"  Pass 2c reconciliation failed for placement {i}: {e}")
                     # Use Pass 2b result as fallback
@@ -1507,7 +1842,8 @@ class VideoEnhancerV2:
                         "action_description": action_desc,
                         "new_parts": [new_part_detected] if new_part_detected else [],
                         "spatial_position": spatial_position,
-                        "box_2d": box_2d,
+                        "box_2d": box_2d_original,  # Bounding box for original frame
+                        "box_2d_sam3": box_2d_sam3,  # Bounding box for SAM3 frame (for reference)
                         "annotated_frame_path": str(annotated_frame_path.relative_to(self.settings.data_dir)) if annotated_frame_path else None,
                         "is_subassembly_switch": is_subassembly_switch,
                         "current_subassembly": self.subassembly_tracker.get_current_subassembly(),
@@ -1527,13 +1863,13 @@ class VideoEnhancerV2:
 
                     logger.info(f"  Placement {i} (frame {frame_num}, step {current_step}): {action_desc} (reconciliation failed)")
 
-                # Track parts usage and advance step if needed
-                parts_used_in_current_step += 1
-                expected_parts_count = step_data.get("total_individual_parts", 0)
-                if parts_used_in_current_step >= expected_parts_count and expected_parts_count > 0:
-                    logger.info(f"  Step {current_step} complete ({parts_used_in_current_step}/{expected_parts_count} parts placed), advancing to step {current_step + 1}")
-                    current_step += 1
-                    parts_used_in_current_step = 0
+                    # Track parts usage even on failure
+                    parts_used_in_current_step += 1
+                    expected_parts_count = step_data.get("total_individual_parts", 0)
+                    if parts_used_in_current_step >= expected_parts_count and expected_parts_count > 0:
+                        logger.info(f"  Step {current_step} complete by part count ({parts_used_in_current_step}/{expected_parts_count} parts placed), advancing to step {current_step + 1}")
+                        current_step += 1
+                        parts_used_in_current_step = 0
 
                 # Write cache incrementally
                 self._write_validated_placements_cache(
@@ -1658,25 +1994,7 @@ class VideoEnhancerV2:
 
         return validated_data
 
-    def _write_reconciled_placements_cache(
-        self,
-        manual_id: str,
-        video_id: str,
-        reconciled_placements: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Write reconciled placements to cache."""
-        output_path = (
-            self.settings.data_dir / "processed" / manual_id
-            / f"video_reconciled_placements_{video_id}.json"
-        )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
-            json.dump(reconciled_placements, f, indent=2)
-
-        logger.info(f"Reconciled placements written to: {output_path}")
-        return reconciled_placements
-
-    # ── VLM Pass 3: Per-Placement Reconciliation ─────────────────────────────
+    # ── VLM Pass 2c: Part Reconciliation ─────────────────────────────────────
 
     async def _pass2c_reconcile_all_sources(
         self,
@@ -1704,9 +2022,10 @@ class VideoEnhancerV2:
         # Build content for VLM call
         content: List[Dict[str, Any]] = []
 
-        # Get original frame path and box_2d for cropping
+        # Get original frame path and bounding boxes
         frame_path = placement.get("frame_path")
-        box_2d = placement.get("box_2d")
+        box_2d_original = placement.get("box_2d_original")  # Bounding box for original frame (from Pass 2a)
+        box_2d_sam3 = placement.get("box_2d_sam3")  # Bounding box for SAM3 frame (from Pass 2b)
 
         # Construct full frame path
         if frame_path:
@@ -1714,30 +2033,17 @@ class VideoEnhancerV2:
         else:
             full_frame_path = None
 
-        # 1. Add full annotated frame (with bounding box) for context
-        annotated_frame_path = placement.get("annotated_frame_path")
-        if annotated_frame_path:
-            full_annotated_path = self.settings.data_dir / annotated_frame_path
-            if full_annotated_path.exists():
-                try:
-                    annotated_img = _resize_image(str(full_annotated_path), width=800)
-                    annotated_b64 = _image_to_b64(annotated_img)
-                    content.append({
-                        "type": "text",
-                        "text": f"VIEW 1 - FULL FRAME CONTEXT (Placement {placement['placement_index']}, Frame {placement['frame_number']}):"
-                    })
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{annotated_b64}"}
-                    })
-                except Exception as e:
-                    logger.warning(f"Could not load annotated frame {annotated_frame_path}: {e}")
-            else:
-                logger.warning(f"Annotated frame not found: {full_annotated_path}")
+        # Get SAM3 segmented frame path from Pass 2b result
+        sam3_current_path = pass2b_result.get("sam3_current_path")
+        if sam3_current_path:
+            full_sam3_path = self.settings.data_dir / sam3_current_path
+        else:
+            full_sam3_path = None
 
-        # 2. Add CROPPED view (tight crop to bounding box) - THIS IS CRITICAL FOR STUD COUNTING
-        if full_frame_path and full_frame_path.exists() and box_2d:
-            cropped_img = _crop_to_bbox(str(full_frame_path), box_2d, padding=30)
+        # 1. Add CROPPED view from ORIGINAL FRAME (Pass 2a context - shows placement on assembly)
+        # Use box_2d_original since it's based on the original frame coordinate system
+        if full_frame_path and full_frame_path.exists() and box_2d_original:
+            cropped_img = _crop_to_bbox(str(full_frame_path), box_2d_original, padding=30)
             if cropped_img:
                 try:
                     # Resize cropped image to reasonable size (keeping aspect ratio)
@@ -1754,19 +2060,53 @@ class VideoEnhancerV2:
                     cropped_b64 = _image_to_b64(cropped_img)
                     content.append({
                         "type": "text",
-                        "text": "VIEW 2 - ZOOMED TO PART (cropped to bounding box - USE THIS FOR STUD COUNTING):"
+                        "text": "VIEW 1 - Pass 2a PLACEMENT CONTEXT (cropped from original frame - shows what the part covers on assembly):"
                     })
                     content.append({
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{cropped_b64}"}
                     })
-                    logger.debug(f"Added cropped bbox view for placement {placement['placement_index']}")
+                    logger.debug(f"Added Pass 2a cropped bbox view for placement {placement['placement_index']}")
                 except Exception as e:
-                    logger.warning(f"Could not process cropped image: {e}")
+                    logger.warning(f"Could not process Pass 2a cropped image: {e}")
             else:
-                logger.debug(f"Could not crop to bbox for placement {placement['placement_index']}")
+                logger.debug(f"Could not crop to bbox from original frame for placement {placement['placement_index']}")
         else:
-            logger.debug(f"Skipping bbox crop - frame_path: {full_frame_path}, box_2d: {box_2d}")
+            logger.debug(f"Skipping Pass 2a bbox crop - frame_path: {full_frame_path}, box_2d_original: {box_2d_original}")
+
+        # 2. Add CROPPED view from SAM3 SEGMENTED FRAME (Pass 2b context - shows isolated part)
+        # Use box_2d_sam3 since it's based on the SAM3 frame coordinate system
+        if full_sam3_path and full_sam3_path.exists() and box_2d_sam3:
+            cropped_sam3_img = _crop_to_bbox(str(full_sam3_path), box_2d_sam3, padding=30)
+            if cropped_sam3_img:
+                try:
+                    # Resize cropped image to reasonable size (keeping aspect ratio)
+                    max_size = 600
+                    if cropped_sam3_img.width > max_size or cropped_sam3_img.height > max_size:
+                        if cropped_sam3_img.width > cropped_sam3_img.height:
+                            new_w = max_size
+                            new_h = int(max_size * cropped_sam3_img.height / cropped_sam3_img.width)
+                        else:
+                            new_h = max_size
+                            new_w = int(max_size * cropped_sam3_img.width / cropped_sam3_img.height)
+                        cropped_sam3_img = cropped_sam3_img.resize((new_w, new_h), PILImage.Resampling.LANCZOS)
+
+                    cropped_sam3_b64 = _image_to_b64(cropped_sam3_img)
+                    content.append({
+                        "type": "text",
+                        "text": "VIEW 2 - Pass 2b SAM3 SEGMENTED (cropped from SAM3 frame - shows isolated part on white background):"
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{cropped_sam3_b64}"}
+                    })
+                    logger.debug(f"Added Pass 2b SAM3 cropped bbox view for placement {placement['placement_index']}")
+                except Exception as e:
+                    logger.warning(f"Could not process Pass 2b SAM3 cropped image: {e}")
+            else:
+                logger.debug(f"Could not crop to bbox from SAM3 frame for placement {placement['placement_index']}")
+        else:
+            logger.debug(f"Skipping Pass 2b SAM3 bbox crop - sam3_path: {full_sam3_path}, box_2d_sam3: {box_2d_sam3}")
 
         # 3. Add expected parts reference images
         if expected_parts:
@@ -1793,7 +2133,7 @@ class VideoEnhancerV2:
                         except Exception as e:
                             logger.warning(f"Could not load part image {part_img_path}: {e}")
 
-        # 4. Build expected parts JSON (without images)
+        # Build expected parts JSON (without images)
         expected_parts_json = [
             {
                 "description": part["description"],
@@ -1802,7 +2142,7 @@ class VideoEnhancerV2:
             for part in expected_parts
         ]
 
-        # 5. Build prompt from template with all three sources
+        # Build prompt from template with all three sources
         prompt = self.pass2c_template.replace(
             "{pass2a_result}", json.dumps(pass2a_result, indent=2)
         ).replace(
@@ -1822,94 +2162,113 @@ class VideoEnhancerV2:
 
         return result
 
-    async def _reconcile_placements_individually(
+    # ── VLM Pass 2d: Step Completion Verification ────────────────────────────
+
+    async def _pass2d_verify_step_completion(
         self,
-        manual_id: str,
-        video_id: str,
-        validated_placements: Dict[str, Any],
-        manual_data: Dict[str, Any]
+        current_sam3_path: str,
+        step_number: int,
+        expected_subassembly_images: List[str],
+        expected_parts: List[Dict[str, Any]],
+        manual_id: str
     ) -> Dict[str, Any]:
         """
-        VLM Pass 3: Reconcile each placement individually against expected parts.
+        Pass 2d: Verify whether the current assembly state has reached step completion.
 
-        Uses annotated frames + reference images to verify/correct part identifications.
-        Returns reconciled placements with verified part information.
+        Compares the current SAM3-segmented assembly against the expected subassembly
+        image(s) for the current step to determine if the step is complete and whether
+        to advance to the next step.
+
+        Args:
+            current_sam3_path: Path to current SAM3 segmented assembly image
+            step_number: Current step number to verify
+            expected_subassembly_images: List of expected subassembly image paths for this step
+            expected_parts: List of expected parts for this step (for context)
+            manual_id: Manual identifier for loading images
+
+        Returns:
+            Step completion verification result with is_step_complete, should_advance_to_step, etc.
         """
-        logger.info("VLM Pass 3: Starting per-placement reconciliation...")
+        # Build content for VLM call
+        content: List[Dict[str, Any]] = []
 
-        # Build parts lookup by step
-        parts_by_step = self._build_parts_by_step(manual_data)
+        # 1. Add CURRENT ASSEMBLY (SAM3 segmented - clean view)
+        if current_sam3_path:
+            full_sam3_path = self.settings.data_dir / current_sam3_path
+            if full_sam3_path.exists():
+                try:
+                    current_img = _resize_image(str(full_sam3_path), width=800)
+                    current_b64 = _image_to_b64(current_img)
+                    content.append({
+                        "type": "text",
+                        "text": "CURRENT ASSEMBLY (SAM3-segmented, white background):"
+                    })
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{current_b64}"}
+                    })
+                    logger.debug(f"Added current SAM3 assembly for step {step_number} verification")
+                except Exception as e:
+                    logger.warning(f"Could not load current SAM3 image: {e}")
+            else:
+                logger.warning(f"Current SAM3 image not found: {full_sam3_path}")
+        else:
+            logger.warning("No current SAM3 path provided for step completion verification")
 
-        # Process all placements
-        placements = validated_placements.get("placements", [])
-        reconciled_placements = []
-        total_reconciled = 0
+        # 2. Add EXPECTED SUBASSEMBLY images
+        if expected_subassembly_images:
+            content.append({
+                "type": "text",
+                "text": f"EXPECTED SUBASSEMBLY FOR STEP {step_number} COMPLETION (reference from manual):"
+            })
+            for idx, subassembly_path in enumerate(expected_subassembly_images):
+                full_subassembly_path = self.settings.data_dir / subassembly_path
+                if full_subassembly_path.exists():
+                    try:
+                        expected_img = _resize_image(str(full_subassembly_path), width=800)
+                        expected_b64 = _image_to_b64(expected_img)
+                        content.append({
+                            "type": "text",
+                            "text": f"Expected Subassembly View {idx + 1}:"
+                        })
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{expected_b64}"}
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not load expected subassembly image {subassembly_path}: {e}")
+                else:
+                    logger.warning(f"Expected subassembly image not found: {full_subassembly_path}")
+        else:
+            logger.warning(f"No expected subassembly images provided for step {step_number}")
 
-        for placement in placements:
-            step_num = placement.get("manual_step", 1)
-            expected_parts_data = parts_by_step.get(step_num, {}).get("parts", [])
+        # 3. Add EXPECTED PARTS context (for reference)
+        expected_parts_json = [
+            {
+                "description": part.get("description", ""),
+                "quantity": part.get("quantity", 1)
+            }
+            for part in expected_parts
+        ]
 
-            try:
-                # Perform per-placement reconciliation
-                reconciliation = await self._reconcile_single_placement(
-                    placement=placement,
-                    expected_parts=expected_parts_data,
-                    step_number=step_num,
-                    manual_id=manual_id
-                )
+        # Build prompt from template
+        prompt = self.pass2d_template.replace(
+            "{step_number}", str(step_number)
+        ).replace(
+            "{expected_parts}", json.dumps(expected_parts_json, indent=2)
+        )
 
-                # Enrich placement with reconciliation data
-                enriched_placement = {
-                    **placement,
-                    "reconciliation": {
-                        "verified": reconciliation.get("verified", False),
-                        "matched_part": reconciliation.get("matched_part"),
-                        "video_detection_correct": reconciliation.get("video_detection_correct", True),
-                        "correction": reconciliation.get("correction"),
-                        "reasoning": reconciliation.get("reasoning", "")
-                    }
-                }
+        content.append({"type": "text", "text": prompt})
 
-                reconciled_placements.append(enriched_placement)
-                total_reconciled += 1
+        # Make VLM call
+        messages = [{"role": "user", "content": content}]
+        raw = self.vlm._litellm_with_retry(messages)
+        result = _parse_json(raw)
 
-                verified = reconciliation.get("verified", False)
-                video_correct = reconciliation.get("video_detection_correct", True)
-                matched_part = reconciliation.get("matched_part")
-                part_desc = matched_part.get("description", "unknown") if matched_part else "none"
+        logger.debug(f"Pass 2d result for step {step_number}: {result}")
+        return result
 
-                logger.info(
-                    f"  Placement {placement['placement_index']} (frame {placement['frame_number']}, step {step_num}): "
-                    f"{'✓ verified' if verified else '✗ unverified'} | "
-                    f"{'✓ correct' if video_correct else '✗ corrected'} | "
-                    f"{part_desc}"
-                )
-
-            except Exception as e:
-                logger.error(f"Failed to reconcile placement {placement['placement_index']}: {e}")
-                # Fallback: keep original placement without reconciliation
-                reconciled_placements.append({
-                    **placement,
-                    "reconciliation": {
-                        "verified": False,
-                        "matched_part": None,
-                        "video_detection_correct": False,
-                        "correction": None,
-                        "reasoning": f"Reconciliation failed: {str(e)}"
-                    }
-                })
-
-        logger.info(f"VLM Pass 3 complete: {total_reconciled} placements reconciled individually")
-
-        return {
-            "manual_id": manual_id,
-            "video_id": video_id,
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "total_placements": len(reconciled_placements),
-            "placements": reconciled_placements
-        }
-
-    # ── VLM Pass 4: Atomic Sub-step Generation ───────────────────────────────
+    # ── VLM Pass 3: Atomic Sub-step Generation ───────────────────────────────
 
     async def _generate_atomic_substeps(
         self,
@@ -1920,10 +2279,10 @@ class VideoEnhancerV2:
         all_frames: List[Path]
     ) -> Dict[str, Any]:
         """
-        VLM Pass 4: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
+        VLM Pass 3: Generate atomic sub-steps (1 part per sub-step) with spatial positioning.
 
-        Uses reconciled placements to create the final video_enhanced.json structure.
-        Sends enhanced.json + reconciled_placements.json as text, plus sample frames.
+        Uses validated placements (with Pass 2c reconciliation) to create the final video_enhanced.json structure.
+        Sends enhanced.json + validated_placements.json as text, plus sample frames.
         """
         enhanced_json_str = json.dumps(manual_data, indent=2)
         reconciled_json_str = json.dumps(reconciled_placements, indent=2)
@@ -2071,9 +2430,6 @@ class VideoEnhancerV2:
 
     def _get_default_frame_quality_prompt(self) -> str:
         return "Classify frames with quality metrics. Return JSON array."
-
-    def _get_default_placement_validation_prompt(self) -> str:
-        return "Validate placements with context. Return JSON."
 
     def _get_default_atomic_substeps_prompt(self) -> str:
         return "Generate atomic sub-steps. Return JSON."

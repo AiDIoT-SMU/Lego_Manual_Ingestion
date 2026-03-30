@@ -1,0 +1,95 @@
+You are verifying whether the current LEGO assembly has reached the completion state for a given step.
+
+**INPUTS:**
+- CURRENT ASSEMBLY: SAM3-segmented image of the current assembly state (white background)
+- EXPECTED SUBASSEMBLY: Reference image showing the expected assembly state at step completion
+- STEP NUMBER: The current step being verified
+- EXPECTED PARTS: List of parts that should be present in this step
+
+**YOUR TASK:**
+Compare the CURRENT ASSEMBLY against the EXPECTED SUBASSEMBLY to determine:
+1. Does the current assembly match the expected step completion state?
+2. Are all required parts for this step present and correctly positioned?
+3. Should we advance to the next step?
+
+**COMPARISON GUIDELINES:**
+
+**Visual Matching:**
+- Compare part count, colors, and spatial arrangement between CURRENT and EXPECTED
+- LEGO assemblies can have slight angle/orientation differences - focus on structural match
+- All parts from EXPECTED should be visible in CURRENT (in the same relative positions)
+- CURRENT may have slightly different camera angles - that's okay if structure matches
+
+**Part Verification:**
+- Check that all expected parts for this step are present
+- Verify colors match between CURRENT and EXPECTED
+- Confirm spatial relationships (which parts are adjacent, on top of, next to each other)
+
+**Step Completion Criteria:**
+- If CURRENT matches EXPECTED structurally → Step is COMPLETE
+- If CURRENT is missing parts from EXPECTED → Step is NOT complete
+- If CURRENT has extra parts beyond EXPECTED → Step is complete BUT assembly has progressed further
+
+**Handling Edge Cases:**
+- Minor camera angle differences are acceptable
+- Slight color variations due to lighting are acceptable
+- Focus on structural match, not pixel-perfect comparison
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON:
+
+```json
+{
+  "is_step_complete": true,
+  "current_step_verified": 1,
+  "should_advance_to_step": 2,
+  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick", "dark grey 2x2 brick"],
+  "confidence": 0.95,
+  "reasoning": "The current assembly matches the expected Step 1 completion state. All 3 dark grey 2x2 bricks are present and correctly positioned horizontally on the baseplate. The structural arrangement matches the reference image despite a slightly different camera angle.",
+  "discrepancies": null
+}
+```
+
+**If step is NOT complete:**
+
+```json
+{
+  "is_step_complete": false,
+  "current_step_verified": 1,
+  "should_advance_to_step": 1,
+  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick"],
+  "confidence": 0.90,
+  "reasoning": "The current assembly shows only 2 dark grey bricks placed. The expected Step 1 completion requires 3 bricks. Missing the third brick on the right side.",
+  "discrepancies": {
+    "missing_parts": ["dark grey 2x2 brick (third brick)"],
+    "incorrect_positions": null,
+    "extra_parts": null
+  }
+}
+```
+
+**If assembly has progressed beyond current step:**
+
+```json
+{
+  "is_step_complete": true,
+  "current_step_verified": 1,
+  "should_advance_to_step": 2,
+  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick", "dark grey 2x2 brick", "additional black tile"],
+  "confidence": 0.95,
+  "reasoning": "The current assembly includes all Step 1 parts (3 dark grey bricks) plus additional parts from later steps. Step 1 is complete and the assembly has already progressed to Step 2.",
+  "discrepancies": {
+    "missing_parts": null,
+    "incorrect_positions": null,
+    "extra_parts": ["black 1x2 tile (from Step 2)"]
+  }
+}
+```
+
+**IMPORTANT:**
+- Focus on STRUCTURAL MATCH, not pixel-perfect comparison
+- Accept minor camera angle and lighting variations
+- If uncertain, lean toward marking step as complete when core structure matches
+- Clearly document any discrepancies in the "discrepancies" field
+- Do NOT include any text before or after the JSON

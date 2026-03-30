@@ -6,20 +6,23 @@ This document describes the complete VLM call pipeline for processing LEGO assem
 
 ## Overview
 
-The video enhancement pipeline uses **5 VLM call stages** to transform raw assembly videos into detailed step-by-step instructions:
+The video enhancement pipeline uses **6 VLM call stages** to transform raw assembly videos into detailed step-by-step instructions:
 
 1. **VLM Pass 1**: Frame Classification
 2. **VLM Pass 2a**: Action Sequence Analysis (prev → ALL action frames → current, NO SAM3)
 3. **VLM Pass 2b**: SAM3 Visual Comparison (ONLY SAM3 segmented prev and current)
 4. **VLM Pass 2c**: Multi-Source Reconciliation (Pass 2a + Pass 2b + Expected Parts)
-5. **VLM Pass 4**: Atomic Sub-steps Generation
+5. **VLM Pass 2d**: Step Completion Verification (Compare assembly state vs expected subassembly)
+6. **VLM Pass 3**: Atomic Sub-steps Generation
 
 **Key improvements:**
-- ✅ **Three Separate Passes**: Pass 2a (action analysis), Pass 2b (SAM3 comparison), Pass 2c (reconciliation)
+- ✅ **Four Validation Sub-Passes**: Pass 2a (action analysis), Pass 2b (SAM3 comparison), Pass 2c (reconciliation), Pass 2d (step completion)
+- ✅ **Temporal Context**: Pass 1 uses temporal sequences to detect when hands retreat from placement
 - ✅ **All Action Frames**: Pass 2a includes ALL action frames (no sampling limit)
 - ✅ **SAM3 Segmentation**: Pass 2b uses clean SAM3-segmented images for accurate stud counting
 - ✅ **Multi-Source Reconciliation**: Pass 2c reconciles THREE sources of evidence for final answer
 - ✅ **Immediate Reconciliation**: Pass 2c runs AFTER EACH placement (not at the end), fixing errors before they propagate
+- ✅ **Step Advancement**: Pass 2d verifies assembly completion and determines when to advance to next step
 
 ---
 
@@ -34,8 +37,14 @@ The video enhancement pipeline uses **5 VLM call stages** to transform raw assem
 - `action`: Frame shows hands actively moving/placing parts
 - `irrelevant`: Frame not useful for instructions
 
-**Input**: Batch of 8 frames at a time
+**Input**: Batch of 8 frames at a time (in chronological order)
 **Output**: Classification + quality scores for each frame
+
+**Key Features**:
+- **Temporal Context**: Frames are analyzed in chronological sequence, allowing the VLM to use temporal patterns
+- **"Hands Retreated" Criteria**: PRIMARY requirement for placement candidates is that "hands have largely RETREATED out of view"
+- **Clear Assembly View**: Must be able to see the main assembly clearly (not obscured by hands)
+- **Strict Disqualification**: If hands are still prominently in frame or assembly is obscured → classified as ACTION, not placement
 
 **Example Output**:
 ```json
@@ -44,9 +53,16 @@ The video enhancement pipeline uses **5 VLM call stages** to transform raw assem
   "is_relevant": true,
   "quality_score": 0.95,
   "has_hand_obstruction": false,
-  "confidence": 0.9
+  "is_stable": true,
+  "confidence": 0.95,
+  "reasoning": "Hands have retreated, clear view of main assembly with newly placed part visible"
 }
 ```
+
+**Improvements from Previous Version**:
+- Previously accepted frames where hands were still visible pressing down on parts
+- Now requires hands to have retreated before classifying as placement_candidate
+- Uses temporal sequence to understand: action (hands placing) → placement (hands retreated) → stable (assembly visible)
 
 ---
 
@@ -81,9 +97,10 @@ The video enhancement pipeline uses **5 VLM call stages** to transform raw assem
     "approximate_size": "2x2",
     "confidence": 0.8
   },
+  "box_2d": [350, 600, 420, 700],
   "action_narrative": "Hands pick up a dark grey brick from the side, position it over the baseplate, and place it down between two white bricks.",
   "confidence": 0.9,
-  "reasoning": "Action frames clearly show hands holding a dark grey brick piece and placing it onto the assembly."
+  "reasoning": "Action frames clearly show hands holding a dark grey brick piece and placing it onto the assembly. Bounding box drawn around the new part in the final placement frame."
 }
 ```
 
@@ -92,6 +109,9 @@ The video enhancement pipeline uses **5 VLM call stages** to transform raw assem
 - Describes what is seen in the hands during action frames
 - Does NOT use SAM3 (analyzes original video frames)
 - Provides approximate part identification (Pass 2b and 2c will verify)
+- **Generates bounding box (box_2d)** for the new part in the CURRENT PLACEMENT FRAME
+  - Coordinates are for the original frame (not SAM3)
+  - Used for annotating original frames and cropping for Pass 2c
 
 ---
 
@@ -151,6 +171,9 @@ The video enhancement pipeline uses **5 VLM call stages** to transform raw assem
 - Clean SAM3 images improve stud counting accuracy
 - Focuses on visual comparison, not action understanding
 - Determines duplicate status (if no change detected)
+- **Generates bounding box (box_2d)** for the new part in the CURRENT SAM3 FRAME
+  - Coordinates are for the SAM3-segmented frame (not original)
+  - Used for annotating SAM3 frames and cropping for Pass 2c
 
 ---
 
@@ -170,9 +193,14 @@ Runs IMMEDIATELY after each accepted placement, correcting errors before they pr
 - Pass 2b result (SAM3 comparison)
 - Expected parts from manual for this step
 - Visual evidence:
-  - VIEW 1: Full frame with bounding box (spatial context)
-  - VIEW 2: Cropped close-up of the part (for stud counting)
+  - VIEW 1: Cropped from ORIGINAL frame using Pass 2a's box_2d (shows placement context on assembly)
+  - VIEW 2: Cropped from SAM3 frame using Pass 2b's box_2d (shows isolated part on white background)
   - VIEW 3: Reference images of expected parts from manual
+
+**Note on Bounding Boxes**:
+- Pass 2a's `box_2d_original`: Coordinates for cropping the original frame (includes hands, table, context)
+- Pass 2b's `box_2d_sam3`: Coordinates for cropping the SAM3-segmented frame (clean white background)
+- Pass 2c uses the appropriate box for each crop to ensure correct coordinate systems
 
 **Output**:
 ```json
@@ -221,7 +249,64 @@ Runs IMMEDIATELY after each accepted placement, correcting errors before they pr
 
 ---
 
-### VLM Pass 4: Atomic Sub-steps Generation
+### VLM Pass 2d: Step Completion Verification
+**Location**: `_pass2d_verify_step_completion()`
+**Prompt**: `prompts/video_pass2d_step_completion.txt`
+
+**Purpose**: Verify whether the current LEGO assembly has reached the completion state for a given step by comparing the current assembly against the expected subassembly image(s) for that step.
+
+**Input (Multimodal)**:
+1. **Current Assembly (SAM3-segmented)** - The current state of the assembly on white background
+2. **Expected Subassembly Image(s)** - Reference image(s) showing what the assembly should look like at step completion
+3. **Step Number** - The current step being verified
+4. **Expected Parts List** - List of parts that should be present in this step
+
+**Output**:
+```json
+{
+  "is_step_complete": true,
+  "current_step_verified": 1,
+  "should_advance_to_step": 2,
+  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick", "dark grey 2x2 brick"],
+  "confidence": 0.95,
+  "reasoning": "The current assembly matches the expected Step 1 completion state. All 3 dark grey 2x2 bricks are present and correctly positioned horizontally on the baseplate. The structural arrangement matches the reference image despite a slightly different camera angle.",
+  "discrepancies": null
+}
+```
+
+**If step is NOT complete**:
+```json
+{
+  "is_step_complete": false,
+  "current_step_verified": 1,
+  "should_advance_to_step": 1,
+  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick"],
+  "confidence": 0.90,
+  "reasoning": "The current assembly shows only 2 dark grey bricks placed. The expected Step 1 completion requires 3 bricks. Missing the third brick on the right side.",
+  "discrepancies": {
+    "missing_parts": ["dark grey 2x2 brick (third brick)"],
+    "incorrect_positions": null,
+    "extra_parts": null
+  }
+}
+```
+
+**Key Features**:
+- **Structural Matching**: Focuses on structural match, not pixel-perfect comparison
+- **Step Advancement Logic**: Determines when to advance to the next step based on assembly state
+- **Handles Camera Angles**: Accepts minor camera angle and lighting variations
+- **Part Verification**: Confirms all expected parts for the step are present
+- **Runs After Each Placement**: Checks after each accepted placement to determine if step is complete
+
+**Impact**:
+- ✅ Accurate step advancement (e.g., frame 530 correctly advances to step 2 after step 1 completion)
+- ✅ Prevents premature advancement (stays on current step until all required parts are placed)
+- ✅ Robust to detection errors (uses visual assembly state, not just part counting)
+- ✅ Handles assembly progression (detects when assembly has progressed beyond current step)
+
+---
+
+### VLM Pass 3: Atomic Sub-steps Generation
 **Location**: `_generate_atomic_substeps()`
 **Prompt**: `prompts/video_atomic_substeps.txt`
 
@@ -229,7 +314,7 @@ Runs IMMEDIATELY after each accepted placement, correcting errors before they pr
 
 **Input**:
 - Manual step information
-- **Reconciled** placements for this step (already corrected by Pass 2c)
+- **Validated** placements for this step (already corrected by Pass 2c reconciliation)
 - Placement frame images
 
 **Output**:
@@ -237,7 +322,7 @@ Runs IMMEDIATELY after each accepted placement, correcting errors before they pr
 {
   "sub_step_number": 1,
   "action_type": "place",
-  "parts_involved": ["dark grey 2x2 brick"],  // Uses reconciled description
+  "parts_involved": ["dark grey 2x2 brick"],  // Uses reconciled description from Pass 2c
   "action_description": "Place dark grey 2x2 brick on left side",
   "spatial_description": {
     "placement_part": "dark grey 2x2 brick",
@@ -245,9 +330,14 @@ Runs IMMEDIATELY after each accepted placement, correcting errors before they pr
     "location": "left side",
     "position_detail": "2 studs from left edge, 3 studs from bottom"
   },
-  "verified": true  // From reconciliation
+  "verified": true  // From Pass 2c reconciliation
 }
 ```
+
+**Key Features**:
+- Uses validated placements that already contain Pass 2c reconciliation data
+- No longer needs a separate reconciliation pass (old "Pass 3" was removed as redundant)
+- Generates atomic sub-steps with spatial positioning details
 
 ---
 
@@ -267,11 +357,11 @@ For each placement candidate:
     ↓
     VLM PASS 2a: Action Sequence Analysis
     │   Input: prev → ALL action frames → current (NO SAM3)
-    │   Output: action_type, part_from_actions, action_narrative
+    │   Output: action_type, part_from_actions, action_narrative, box_2d_original
     ↓
     VLM PASS 2b: SAM3 Visual Comparison
     │   Input: ONLY SAM3 segmented prev and current (NO action frames)
-    │   Output: is_duplicate, new_part_detected, box_2d
+    │   Output: is_duplicate, new_part_detected, box_2d_sam3
     ↓
     Check duplicate status from Pass 2b
     ↓
@@ -284,12 +374,18 @@ For each placement candidate:
         │   Accept placement with reconciled data
         │   Update action_description with final_part
         ↓
+        VLM PASS 2d: Step Completion Verification
+        │   Input: Current SAM3 assembly + Expected subassembly + Step info
+        │   Output: is_step_complete, should_advance_to_step
+        │   ↓
+        │   IF step complete → Advance to next step
+        ↓
         Continue to next placement candidate
     ↓
-All placements validated + reconciled
+All placements validated + reconciled + step advancement handled
     ↓
-VLM PASS 4: Generate Atomic Sub-steps
-    (Uses reconciled placements)
+VLM PASS 3: Generate Atomic Sub-steps
+    (Uses validated placements with Pass 2c reconciliation)
     ↓
 Final video_enhanced.json
 ```
@@ -299,21 +395,29 @@ Final video_enhanced.json
 ## Key Improvements from Three-Pass Architecture
 
 ### Improvement 1: Separate Action Analysis from Visual Comparison
-**Why Three Passes**:
+**Why Four Sub-Passes in Pass 2**:
 - **Pass 2a**: Focuses on understanding the ACTION (what's happening in the sequence)
   - Sees ALL action frames (no sampling limit)
   - Provides action narrative and approximate part identification
+  - Generates bounding boxes for original frames
 - **Pass 2b**: Focuses on VISUAL COMPARISON (what changed)
   - Uses clean SAM3 images for accurate stud counting
   - Determines duplicate status and exact part identification
+  - Generates bounding boxes for SAM3 frames
 - **Pass 2c**: RECONCILES all sources to find the truth
   - Counts studs independently in cropped close-up (VIEW 2)
   - Explicitly identifies which source was wrong and why
+  - Uses correct bounding boxes for each coordinate system
+- **Pass 2d**: VERIFIES step completion
+  - Compares assembly state against expected subassembly
+  - Determines when to advance to next step
 
 **Benefit**:
-- Each pass has a clear, focused purpose
+- Each sub-pass has a clear, focused purpose
 - Pass 2c can catch errors from BOTH Pass 2a and Pass 2b
+- Pass 2d ensures accurate step advancement
 - No "split-brain" problem - reconciliation sees both perspectives
+- Dual bounding boxes prevent coordinate system mismatches
 
 ### Improvement 2: Multi-Source Reconciliation
 **Three Sources of Evidence**:
@@ -368,6 +472,58 @@ Pass 2c: Counts 4 studs in VIEW 2 → "dark grey 2x2 brick" (CORRECT)
 - Improves accuracy for 1×2 vs 2×2 vs 2×4 detection
 - Clean images help VLM count studs more reliably
 
+### Improvement 6: Visual Step Completion Verification
+**Old Behavior**:
+- Step advancement based on part counting
+- Prone to errors if parts misdetected or duplicates not filtered
+- Frame 530 should advance to step 2 but doesn't
+
+**New Behavior (Pass 2d)**:
+- Compares current SAM3 assembly against expected subassembly image
+- Uses visual structural matching instead of just counting parts
+- Explicitly determines: is_step_complete and should_advance_to_step
+- Frame 530 correctly advances to step 2 when Step 1 assembly matches expected state
+
+**Benefit**:
+- More robust to part detection errors
+- Uses visual assembly state as ground truth
+- Handles camera angle variations
+- Prevents premature or late step advancement
+
+### Improvement 7: Dual Bounding Box System
+**The Problem**:
+- Pass 2a analyzes original frames (with hands, table, background)
+- Pass 2b analyzes SAM3 frames (assembly only, white background)
+- Different coordinate systems → can't use same bounding box!
+
+**The Solution**:
+- Pass 2a generates `box_2d_original` for original frame coordinate system
+- Pass 2b generates `box_2d_sam3` for SAM3 frame coordinate system
+- Pass 2c uses correct box for each crop operation
+- Annotated frames use correct box for their frame type
+
+**Benefit**:
+- Bounding boxes now appear correctly on LEGO parts (not hands/shadows)
+- VIEW 1 and VIEW 2 in Pass 2c are cropped correctly
+- No more coordinate system mismatch errors
+
+### Improvement 8: Temporal Context in Frame Classification
+**Old Behavior**:
+- Pass 1 classified frames independently
+- Accepted frames where hands were still visible pressing down
+- Frames 0605, 0380 incorrectly classified as placement_candidate
+
+**New Behavior**:
+- Pass 1 receives frames in chronological sequence
+- Uses temporal context: action (hands placing) → placement (hands retreated) → stable
+- PRIMARY CRITERIA: "Hands have largely RETREATED out of view"
+- Frames with hands still prominent → classified as ACTION, not placement
+
+**Benefit**:
+- Better placement candidate detection
+- Waits for hands to retreat before capturing placement frame
+- More stable, clear images for placement analysis
+
 ---
 
 ## Cost Considerations
@@ -376,29 +532,39 @@ Pass 2c: Counts 4 studs in VIEW 2 → "dark grey 2x2 brick" (CORRECT)
 - **Pass 2a**: ~0-60 VLM calls (one per placement candidate with action frames)
   - Includes ALL action frames (no sampling limit)
   - Does NOT use SAM3 (original frames only)
+  - Generates bounding boxes for original frames
 - **Pass 2b**: ~0-60 VLM calls (one per placement candidate)
   - ONLY sends 2 SAM3 images (prev + current)
   - Requires SAM3 API calls for segmentation (~0-120 calls)
+  - Generates bounding boxes for SAM3 frames
 - **Pass 2c**: ~15 VLM calls (one per accepted placement, inline)
   - Reconciles Pass 2a + Pass 2b + expected parts
   - Runs immediately after each accepted placement
-- **Pass 4**: ~1-8 VLM calls (one per manual step)
+  - Uses both bounding boxes for cropping
+- **Pass 2d**: ~15 VLM calls (one per accepted placement, inline)
+  - Verifies step completion by comparing assembly state vs expected subassembly
+  - Determines when to advance to next step
+- **Pass 3**: ~1-8 VLM calls (one per manual step)
 
-**Total VLM**: ~105-168 VLM calls per video
+**Total VLM**: ~120-183 VLM calls per video
 **Total SAM3**: ~0-120 API calls (for Pass 2b segmentation)
 
 **Cost Breakdown**:
-- Pass 1: 13-25 VLM calls
-- Pass 2a: 0-60 VLM calls (action analysis)
-- Pass 2b: 0-60 VLM calls (SAM3 comparison)
+- Pass 1: 13-25 VLM calls (frame classification)
+- Pass 2a: 0-60 VLM calls (action analysis with bounding boxes)
+- Pass 2b: 0-60 VLM calls (SAM3 comparison with bounding boxes)
 - Pass 2c: 15 VLM calls (reconciliation)
-- Pass 4: 1-8 VLM calls
+- Pass 2d: 15 VLM calls (step completion verification)
+- Pass 3: 1-8 VLM calls (atomic sub-steps)
 - SAM3: 0-120 API calls
 
 **Trade-off**: More VLM calls than unified architecture, but better accuracy through:
+- Temporal context in Pass 1 (hands retreated detection)
 - Complete action sequences (all frames)
 - Clean SAM3 images for stud counting
+- Separate bounding boxes for original vs SAM3 frames
 - Multi-source reconciliation catching errors from both passes
+- Visual step completion verification
 
 ---
 
@@ -415,13 +581,14 @@ Each placement candidate shows:
   - Analyzed N action frames
   - action_type, has_new_part
   - part_from_actions (description, color, type, size)
+  - box_2d (for original frame)
   - action_narrative
   - confidence, reasoning
 - **VLM Pass 2b - SAM3 Comparison**:
   - SAM3 segmented image paths (prev + current)
   - is_duplicate, has_new_part
   - new_part_detected (description, stud_count)
-  - spatial_position, box_2d
+  - spatial_position, box_2d (for SAM3 frame)
   - confidence, reasoning
 - **VLM Pass 2c - Reconciliation** (if accepted):
   - Inputs: Pass 2a result, Pass 2b result, Expected parts
@@ -430,6 +597,11 @@ Each placement candidate shows:
   - corrections (what each source said, which were wrong)
   - stud_count_analysis (independent verification)
   - reasoning
+- **VLM Pass 2d - Step Completion** (if accepted):
+  - Inputs: Current SAM3 assembly, Expected subassembly, Step info
+  - is_step_complete, should_advance_to_step
+  - parts_matched, discrepancies
+  - confidence, reasoning
 - Final verdict
 
 ### SAM3 Segmented Frames
@@ -498,15 +670,20 @@ SAM3 segmentation is optional:
 4. If Pass 2b is failing, validation will be skipped (requires SAM3)
 
 ### VLM Detections Still Wrong
-1. Check all three passes are running:
+1. Check all four validation sub-passes are running:
    - VLM PASS 2a - ACTION ANALYSIS
    - VLM PASS 2b - SAM3 COMPARISON
    - VLM PASS 2c - RECONCILIATION
+   - VLM PASS 2d - STEP COMPLETION VERIFICATION
 2. Check Pass 2c reconciliation output:
    - sources_agree: Are the three sources consistent?
    - pass2a_correct, pass2b_correct: Which source was wrong?
    - corrections: What corrections were made?
-3. Review VLM reasoning logs for detailed decision process
+3. Check Pass 2d step completion output:
+   - is_step_complete: Is the step verified as complete?
+   - should_advance_to_step: Is advancement happening correctly?
+   - discrepancies: Are any parts missing or incorrectly positioned?
+4. Review VLM reasoning logs for detailed decision process
 
 ### Error Propagation Still Happening
 1. Verify Pass 2c runs AFTER each placement (not batched at end)
@@ -527,11 +704,15 @@ This is expected! Pass 2c is designed to handle disagreements:
 
 The three-pass architecture with SAM3 and immediate reconciliation provides:
 
-✅ **Separate, Focused Analysis**: Pass 2a (action), Pass 2b (visual), Pass 2c (reconciliation)
-✅ **Multi-Source Reconciliation**: Reconciles THREE sources of evidence for final answer
+✅ **Temporal Context**: Pass 1 uses frame sequences to detect when hands have retreated
+✅ **Separate, Focused Analysis**: Pass 2a (action), Pass 2b (visual), Pass 2c (reconciliation), Pass 2d (step completion)
+✅ **Dual Bounding Boxes**: Pass 2a generates box for original frames, Pass 2b for SAM3 frames (correct coordinate systems)
+✅ **Multi-Source Reconciliation**: Pass 2c reconciles THREE sources of evidence for final answer
 ✅ **All Action Frames**: Pass 2a includes ALL action frames (no sampling limit)
 ✅ **Better Stud Counting**: SAM3 segmentation in Pass 2b improves accuracy
 ✅ **Error Detection**: Pass 2c can catch errors from BOTH Pass 2a and Pass 2b
 ✅ **Immediate Error Correction**: Pass 2c runs after each placement, fixing errors before propagation
 ✅ **Explicit Conflict Resolution**: Pass 2c states which source was wrong and why
-✅ **Better Debugging**: Detailed logs show all three pass results + corrections
+✅ **Visual Step Completion**: Pass 2d verifies assembly state matches expected subassembly for accurate step advancement
+✅ **No Redundant Passes**: Old "Pass 3" (per-placement reconciliation) removed - Pass 2c already handles this inline
+✅ **Better Debugging**: Detailed logs show all pass results + corrections + step verification

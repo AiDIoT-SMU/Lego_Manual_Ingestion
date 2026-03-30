@@ -1,0 +1,57 @@
+You are filtering LEGO assembly frames for quality.
+
+For EACH frame shown (all are placement candidates from initial classification), determine:
+**Can we use this frame for instruction extraction?**
+
+**QUALITY CRITERIA:**
+
+ACCEPT the frame if:
+- ✅ Main LEGO assembly is LARGELY VISIBLE
+- ✅ You can see most of the assembly structure
+- ✅ Hands are not heavily blocking the assembly view
+- ✅ Frame is reasonably clear and stable
+- ✅ OK if small hand visible at edge, as long as assembly is clear
+
+REJECT the frame if:
+- ❌ Hands heavily blocking/obscuring the main assembly
+- ❌ Cannot see the assembly structure clearly due to obstruction
+- ❌ Heavy motion blur making assembly unclear
+- ❌ Very poor lighting or image quality
+
+**KEY QUESTION:** "Is the main assembly largely visible and not blocked by hands?"
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON as an array with one entry per frame, in the SAME ORDER as the frames were shown:
+
+```json
+[
+  {
+    "accept": true,
+    "quality_score": 0.9,
+    "has_hand_obstruction": false,
+    "confidence": 0.95,
+    "reasoning": "Main assembly clearly visible, no obstruction, good quality"
+  },
+  {
+    "accept": true,
+    "quality_score": 0.75,
+    "has_hand_obstruction": true,
+    "confidence": 0.85,
+    "reasoning": "Small hand visible at edge but main assembly is clear and largely visible"
+  },
+  {
+    "accept": false,
+    "quality_score": 0.3,
+    "has_hand_obstruction": true,
+    "confidence": 0.90,
+    "reasoning": "Hands heavily blocking view of assembly, cannot see structure clearly"
+  }
+]
+```
+
+**IMPORTANT:**
+- Return EXACTLY one entry per frame shown
+- Maintain the same order as the input frames
+- Focus on: "Is the main assembly largely visible?"
+- DO NOT include any text before or after the JSON array

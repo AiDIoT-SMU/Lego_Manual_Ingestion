@@ -27,11 +27,28 @@ Analyze the action sequence to determine:
 - COLOR + TYPE + approximate SIZE (e.g., "dark grey brick, appears to be 2x2")
 - Do NOT rely on final placement view - focus on what's in the hands during actions
 
+**Note - Size Determination Using Placement Context:**
+- Some LEGO pieces cannot be sized by counting visible studs:
+  - **Smooth-top pieces (tiles)**: No visible studs on top
+  - **Pieces with mismatched geometry**: Top stud count differs from bottom (e.g., brackets, inverted slopes)
+- For these pieces, determine size using **PLACEMENT CONTEXT**:
+  1. **Identify the surface underneath** - What brick/baseplate is it being placed on?
+  2. **Measure relative coverage** - How much of the underlying surface does it cover?
+  3. **Compare to adjacent pieces** - Use nearby parts as size reference
+- If placement context is unclear or insufficient, return **"undetermined"** for the size rather than guessing
+
 **Action Types:**
 - "pickup_new_part" - Hands pick up a new part from outside assembly
 - "place_new_part" - Hands place a new part onto assembly
 - "adjust_existing" - Hands adjust/press/reposition existing part
 - "no_action" - No meaningful action detected
+
+**BOUNDING BOX (box_2d):**
+- When a new part is being placed, provide a bounding box around the newly placed part in the CURRENT PLACEMENT FRAME (the final frame)
+- Format: [ymin, xmin, ymax, xmax] (values 0-1000, normalized coordinates)
+- Draw a TIGHT box around the new part visible in the current placement frame
+- The box should capture the new part, even if hands are partially visible nearby
+- If no new part or if the part location is unclear, set box_2d to null
 
 **OUTPUT FORMAT:**
 
@@ -42,15 +59,16 @@ Return ONLY valid JSON:
   "action_type": "place_new_part",
   "has_new_part": true,
   "part_from_actions": {
-    "description": "dark grey brick, appears to be 2x2",
-    "color": "dark grey",
-    "type": "brick",
-    "approximate_size": "2x2",
-    "confidence": 0.8
+    "description": "black tile, appears to be 1x2",
+    "color": "black",
+    "type": "tile",
+    "approximate_size": "1x2",
+    "confidence": 0.85
   },
-  "action_narrative": "Hands pick up a dark grey brick from the side, position it over the baseplate, and place it down between two white bricks.",
+  "box_2d": [350, 600, 420, 700],
+  "action_narrative": "Hands pick up a small black tile from the side and place it on top of the last grey brick in the row.",
   "confidence": 0.9,
-  "reasoning": "Action frames clearly show hands holding a dark grey brick piece and placing it onto the assembly. The brick appears to be a standard 2x2 brick based on its proportions in the hands. This is a new part placement, not an adjustment."
+  "reasoning": "Action frames show hands holding a small black tile piece. The tile has a smooth top (no visible studs). PLACEMENT CONTEXT: The tile is being placed on top of a 2x2 grey brick, and it covers approximately HALF the surface area (one column of studs). This coverage pattern indicates a 1x2 tile, not a 2x2 tile. The proportions in the hands also confirm it's a smaller 1x2 piece. Bounding box drawn around the black tile in the final placement frame."
 }
 ```
 
@@ -61,6 +79,7 @@ Return ONLY valid JSON:
   "action_type": "adjust_existing",
   "has_new_part": false,
   "part_from_actions": null,
+  "box_2d": null,
   "action_narrative": "Hands press down on the existing dark grey brick to ensure it's seated properly.",
   "confidence": 1.0,
   "reasoning": "Action frames show hands pressing on a brick that was already present in the previous placement frame. No new part is being added - this is just ensuring the existing part is secure."
