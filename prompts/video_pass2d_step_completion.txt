@@ -1,95 +1,86 @@
-You are verifying whether the current LEGO assembly has reached the completion state for a given step.
+You are performing a simple visual comparison between two LEGO assembly images.
 
 **INPUTS:**
-- CURRENT ASSEMBLY: SAM3-segmented image of the current assembly state (white background)
-- EXPECTED SUBASSEMBLY: Reference image showing the expected assembly state at step completion
-- STEP NUMBER: The current step being verified
-- EXPECTED PARTS: List of parts that should be present in this step
+- CURRENT ASSEMBLY: SAM3-segmented image showing the current assembly state (white background)
+- EXPECTED SUBASSEMBLY: Reference image showing what the assembly should look like at step {step_number} completion
 
 **YOUR TASK:**
-Compare the CURRENT ASSEMBLY against the EXPECTED SUBASSEMBLY to determine:
-1. Does the current assembly match the expected step completion state?
-2. Are all required parts for this step present and correctly positioned?
+Compare these two images visually and determine:
+1. Does the CURRENT assembly match the EXPECTED subassembly?
+2. Is the current assembly complete, incomplete, or has it progressed beyond the expected state?
 3. Should we advance to the next step?
 
-**COMPARISON GUIDELINES:**
+**VISUAL COMPARISON GUIDELINES:**
 
-**Visual Matching:**
-- Compare part count, colors, and spatial arrangement between CURRENT and EXPECTED
-- LEGO assemblies can have slight angle/orientation differences - focus on structural match
-- All parts from EXPECTED should be visible in CURRENT (in the same relative positions)
-- CURRENT may have slightly different camera angles - that's okay if structure matches
+**Matching Criteria:**
+- Compare the overall structure, part count, colors, and spatial arrangement
+- CURRENT should have the same parts in the same positions as EXPECTED
+- Minor camera angle differences are acceptable - focus on structural match, not pixel-perfect
+- Slight lighting/color variations are acceptable
 
-**Part Verification:**
-- Check that all expected parts for this step are present
-- Verify colors match between CURRENT and EXPECTED
-- Confirm spatial relationships (which parts are adjacent, on top of, next to each other)
+**Completion Assessment:**
+- **COMPLETE**: CURRENT matches EXPECTED structurally (all parts present in correct positions)
+- **INCOMPLETE**: CURRENT is missing parts that are visible in EXPECTED
+- **PROGRESSED**: CURRENT has everything from EXPECTED plus additional parts (assembly has moved ahead)
 
-**Step Completion Criteria:**
-- If CURRENT matches EXPECTED structurally → Step is COMPLETE
-- If CURRENT is missing parts from EXPECTED → Step is NOT complete
-- If CURRENT has extra parts beyond EXPECTED → Step is complete BUT assembly has progressed further
-
-**Handling Edge Cases:**
-- Minor camera angle differences are acceptable
-- Slight color variations due to lighting are acceptable
-- Focus on structural match, not pixel-perfect comparison
+**Decision Rules:**
+- If CURRENT matches EXPECTED → `is_step_complete: true`, advance to next step
+- If CURRENT is missing parts → `is_step_complete: false`, stay on current step
+- If CURRENT has extra parts → `is_step_complete: true`, advance to next step (already ahead)
 
 **OUTPUT FORMAT:**
 
-Return ONLY valid JSON:
+Return ONLY valid JSON with this structure:
 
 ```json
 {
   "is_step_complete": true,
   "current_step_verified": 1,
   "should_advance_to_step": 2,
-  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick", "dark grey 2x2 brick"],
   "confidence": 0.95,
-  "reasoning": "The current assembly matches the expected Step 1 completion state. All 3 dark grey 2x2 bricks are present and correctly positioned horizontally on the baseplate. The structural arrangement matches the reference image despite a slightly different camera angle.",
+  "reasoning": "The current assembly matches the expected state for Step 1. Both images show the same structure with identical part arrangement. Ready to advance to Step 2.",
   "discrepancies": null
 }
 ```
 
-**If step is NOT complete:**
+**Example - Step INCOMPLETE:**
 
 ```json
 {
   "is_step_complete": false,
   "current_step_verified": 1,
   "should_advance_to_step": 1,
-  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick"],
   "confidence": 0.90,
-  "reasoning": "The current assembly shows only 2 dark grey bricks placed. The expected Step 1 completion requires 3 bricks. Missing the third brick on the right side.",
+  "reasoning": "The current assembly is missing parts shown in the expected image. Expected shows 3 bricks, current only has 2. Step 1 is not yet complete.",
   "discrepancies": {
-    "missing_parts": ["dark grey 2x2 brick (third brick)"],
+    "missing_parts": ["one brick on the right side"],
     "incorrect_positions": null,
     "extra_parts": null
   }
 }
 ```
 
-**If assembly has progressed beyond current step:**
+**Example - Assembly PROGRESSED:**
 
 ```json
 {
   "is_step_complete": true,
   "current_step_verified": 1,
   "should_advance_to_step": 2,
-  "parts_matched": ["dark grey 2x2 brick", "dark grey 2x2 brick", "dark grey 2x2 brick", "additional black tile"],
   "confidence": 0.95,
-  "reasoning": "The current assembly includes all Step 1 parts (3 dark grey bricks) plus additional parts from later steps. Step 1 is complete and the assembly has already progressed to Step 2.",
+  "reasoning": "The current assembly includes all parts from the expected Step 1 state plus additional parts. Step 1 is complete and assembly has progressed beyond it.",
   "discrepancies": {
     "missing_parts": null,
     "incorrect_positions": null,
-    "extra_parts": ["black 1x2 tile (from Step 2)"]
+    "extra_parts": ["additional parts visible beyond Step 1 requirements"]
   }
 }
 ```
 
 **IMPORTANT:**
-- Focus on STRUCTURAL MATCH, not pixel-perfect comparison
-- Accept minor camera angle and lighting variations
-- If uncertain, lean toward marking step as complete when core structure matches
-- Clearly document any discrepancies in the "discrepancies" field
+- This is purely a VISUAL IMAGE COMPARISON task
+- Focus on structural similarity, not exact pixel matching
+- Accept minor angle/lighting differences
+- Describe what you see in the images
+- Be concise in your reasoning
 - Do NOT include any text before or after the JSON

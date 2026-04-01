@@ -1781,7 +1781,6 @@ class VideoEnhancerV2:
                             current_sam3_path=sam3_current_path,
                             step_number=current_step,
                             expected_subassembly_images=expected_subassembly_images,
-                            expected_parts=expected_parts_data,
                             manual_id=manual_id
                         )
 
@@ -2169,21 +2168,18 @@ class VideoEnhancerV2:
         current_sam3_path: str,
         step_number: int,
         expected_subassembly_images: List[str],
-        expected_parts: List[Dict[str, Any]],
         manual_id: str
     ) -> Dict[str, Any]:
         """
         Pass 2d: Verify whether the current assembly state has reached step completion.
 
-        Compares the current SAM3-segmented assembly against the expected subassembly
-        image(s) for the current step to determine if the step is complete and whether
-        to advance to the next step.
+        Performs pure visual comparison between the current SAM3-segmented assembly
+        and the expected subassembly image(s) for the current step. No parts list needed.
 
         Args:
             current_sam3_path: Path to current SAM3 segmented assembly image
             step_number: Current step number to verify
             expected_subassembly_images: List of expected subassembly image paths for this step
-            expected_parts: List of expected parts for this step (for context)
             manual_id: Manual identifier for loading images
 
         Returns:
@@ -2242,20 +2238,9 @@ class VideoEnhancerV2:
         else:
             logger.warning(f"No expected subassembly images provided for step {step_number}")
 
-        # 3. Add EXPECTED PARTS context (for reference)
-        expected_parts_json = [
-            {
-                "description": part.get("description", ""),
-                "quantity": part.get("quantity", 1)
-            }
-            for part in expected_parts
-        ]
-
-        # Build prompt from template
+        # Build prompt from template (pure visual comparison, no parts list)
         prompt = self.pass2d_template.replace(
             "{step_number}", str(step_number)
-        ).replace(
-            "{expected_parts}", json.dumps(expected_parts_json, indent=2)
         )
 
         content.append({"type": "text", "text": prompt})

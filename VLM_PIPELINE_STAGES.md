@@ -6,18 +6,20 @@ This document describes the complete VLM call pipeline for processing LEGO assem
 
 ## Overview
 
-The video enhancement pipeline uses **6 VLM call stages** to transform raw assembly videos into detailed step-by-step instructions:
+The video enhancement pipeline uses **7 VLM call stages** to transform raw assembly videos into detailed step-by-step instructions:
 
-1. **VLM Pass 1**: Frame Classification
-2. **VLM Pass 2a**: Action Sequence Analysis (prev → ALL action frames → current, NO SAM3)
-3. **VLM Pass 2b**: SAM3 Visual Comparison (ONLY SAM3 segmented prev and current)
-4. **VLM Pass 2c**: Multi-Source Reconciliation (Pass 2a + Pass 2b + Expected Parts)
-5. **VLM Pass 2d**: Step Completion Verification (Compare assembly state vs expected subassembly)
-6. **VLM Pass 3**: Atomic Sub-steps Generation
+1. **VLM Pass 1a**: Frame Classification (action vs placement_candidate)
+2. **VLM Pass 1b**: Quality Filtering (assembly visibility)
+3. **VLM Pass 2a**: Action Sequence Analysis (prev → ALL action frames → current, NO SAM3)
+4. **VLM Pass 2b**: SAM3 Visual Comparison (ONLY SAM3 segmented prev and current)
+5. **VLM Pass 2c**: Multi-Source Reconciliation (Pass 2a + Pass 2b + Expected Parts)
+6. **VLM Pass 2d**: Step Completion Verification (Compare assembly state vs expected subassembly)
+7. **VLM Pass 3**: Atomic Sub-steps Generation
 
 **Key improvements:**
+- ✅ **Two-Stage Frame Selection**: Pass 1a (classification), Pass 1b (quality filtering)
 - ✅ **Four Validation Sub-Passes**: Pass 2a (action analysis), Pass 2b (SAM3 comparison), Pass 2c (reconciliation), Pass 2d (step completion)
-- ✅ **Temporal Context**: Pass 1 uses temporal sequences to detect when hands retreat from placement
+- ✅ **Temporal Context**: Pass 1a uses temporal sequences to detect action vs placement transitions
 - ✅ **All Action Frames**: Pass 2a includes ALL action frames (no sampling limit)
 - ✅ **SAM3 Segmentation**: Pass 2b uses clean SAM3-segmented images for accurate stud counting
 - ✅ **Multi-Source Reconciliation**: Pass 2c reconciles THREE sources of evidence for final answer
@@ -28,41 +30,110 @@ The video enhancement pipeline uses **6 VLM call stages** to transform raw assem
 
 ## Detailed Stage Descriptions
 
-### VLM Pass 1: Frame Classification
-**Location**: `_classify_frames_with_quality()`
-**Prompt**: `prompts/video_frame_quality.txt`
+### VLM Pass 1a: Frame Classification (Temporal Context)
+**Location**: `_pass1a_classify_batch()`
+**Prompt**: `prompts/video_pass1a_classification.txt`
 
-**Purpose**: Classify each video frame into one of three categories:
-- `placement_candidate`: Frame shows completed placement (hands clear, part placed)
-- `action`: Frame shows hands actively moving/placing parts
-- `irrelevant`: Frame not useful for instructions
+**Purpose**: Classify each video frame using temporal sequence analysis to distinguish between action frames and placement candidates.
 
-**Input**: Batch of 8 frames at a time (in chronological order)
-**Output**: Classification + quality scores for each frame
+**Frame Types**:
+- `placement_candidate`: Part placed, hands retreated, assembly stable and visible
+- `action`: Hands actively manipulating parts, motion blur, assembly obscured
+- `irrelevant`: Frame not useful for instructions (title screens, credits, blank frames)
 
-**Key Features**:
-- **Temporal Context**: Frames are analyzed in chronological sequence, allowing the VLM to use temporal patterns
-- **"Hands Retreated" Criteria**: PRIMARY requirement for placement candidates is that "hands have largely RETREATED out of view"
-- **Clear Assembly View**: Must be able to see the main assembly clearly (not obscured by hands)
-- **Strict Disqualification**: If hands are still prominently in frame or assembly is obscured → classified as ACTION, not placement
+**Input**: Batch of frames in chronological order (default: 10 frames per batch)
 
-**Example Output**:
+**Output**: Classification for each frame with:
 ```json
 {
-  "frame_type": "placement_candidate",
   "is_relevant": true,
-  "quality_score": 0.95,
-  "has_hand_obstruction": false,
+  "frame_type": "placement_candidate",
   "is_stable": true,
   "confidence": 0.95,
-  "reasoning": "Hands have retreated, clear view of main assembly with newly placed part visible"
+  "reasoning": "Part placed, hands retreated from assembly, stable view"
 }
 ```
 
+**Key Features**:
+- **Temporal Context**: Analyzes frames as a sequence, not independently
+- **Action Flow Detection**: Understands the pattern: hands placing → hands retreating → stable assembly
+- **Liberal Classification**: When uncertain, prefers classifying as placement_candidate (better to have multiple candidates than miss one)
+- **Batch Processing**: Efficient VLM usage by analyzing multiple frames per call
+
+**Classification Criteria**:
+
+**IRRELEVANT frames**:
+- Title screens, credits, blank/black frames
+- No LEGO assembly visible
+- Camera transitions, setup/teardown
+
+**ACTION frames**:
+- Hands actively manipulating parts
+- Parts being lifted, moved, positioned, or pressed down
+- Hands blocking/obscuring the main assembly
+- Motion blur from hands or parts moving
+
+**PLACEMENT_CANDIDATE frames**:
+- Part has been placed and assembly appears stable
+- Hands have largely retreated from assembly area
+- Main assembly is visible (even if hands partially visible at edges)
+- Assembly is stationary (not being actively manipulated)
+
 **Improvements from Previous Version**:
-- Previously accepted frames where hands were still visible pressing down on parts
-- Now requires hands to have retreated before classifying as placement_candidate
-- Uses temporal sequence to understand: action (hands placing) → placement (hands retreated) → stable (assembly visible)
+- Now uses temporal context instead of analyzing frames independently
+- Better at detecting when hands have retreated after placement
+- More reliable identification of stable placement moments
+
+---
+
+### VLM Pass 1b: Quality Filtering (Assembly Visibility)
+**Location**: `_pass1b_filter_batch()`
+**Prompt**: `prompts/video_pass1b_quality_filter.txt`
+
+**Purpose**: Filter placement candidates from Pass 1a to ensure the main assembly is clearly visible and suitable for instruction extraction.
+
+**Input**: Placement candidate frames from Pass 1a (batched for efficiency)
+
+**Output**: Quality assessment for each frame:
+```json
+{
+  "accept": true,
+  "quality_score": 0.9,
+  "has_hand_obstruction": false,
+  "confidence": 0.95,
+  "reasoning": "Main assembly clearly visible, no obstruction, good quality"
+}
+```
+
+**Quality Criteria**:
+
+**ACCEPT the frame if**:
+- ✅ Main LEGO assembly is LARGELY VISIBLE
+- ✅ You can see most of the assembly structure
+- ✅ Hands are not heavily blocking the assembly view
+- ✅ Frame is reasonably clear and stable
+- ✅ OK if small hand visible at edge, as long as assembly is clear
+
+**REJECT the frame if**:
+- ❌ Hands heavily blocking/obscuring the main assembly
+- ❌ Cannot see the assembly structure clearly due to obstruction
+- ❌ Heavy motion blur making assembly unclear
+- ❌ Very poor lighting or image quality
+
+**Key Features**:
+- **Focus on Assembly Visibility**: Primary question is "Can we see the main assembly clearly?"
+- **Hand Obstruction Filtering**: Rejects frames where hands heavily block the assembly
+- **Quality Scoring**: Assigns quality_score (0.0-1.0) to each frame
+- **Batch Processing**: Analyzes multiple frames per VLM call for efficiency
+
+**Example Metrics**:
+- Input: 100 placement_candidates from Pass 1a
+- Output: ~60-70 high-quality frames accepted, ~30-40 rejected due to hand obstruction
+
+**Impact**:
+- ✅ Only high-quality, clear frames proceed to expensive Pass 2 analysis
+- ✅ Reduces false positives from Pass 1a where hands still partially obstruct
+- ✅ Improves accuracy of downstream placement analysis
 
 ---
 
@@ -346,11 +417,16 @@ Runs IMMEDIATELY after each accepted placement, correcting errors before they pr
 ```
 Video Frames (every 5 frames)
     ↓
-VLM PASS 1: Frame Classification
-    ├─→ placement_candidate frames (60)
-    └─→ action frames (124)
+VLM PASS 1a: Frame Classification (Temporal Context)
+    ├─→ irrelevant frames (filtered out)
+    ├─→ action frames (logged)
+    └─→ placement_candidate frames (~100)
     ↓
-For each placement candidate:
+VLM PASS 1b: Quality Filtering (Assembly Visibility)
+    ├─→ rejected frames (hand obstruction, poor quality) (~30-40)
+    └─→ high-quality placement frames (~60-70)
+    ↓
+For each high-quality placement candidate:
     ↓
     ├─→ Get previous accepted placement frame
     ├─→ Get ALL action frames between previous and current (no sampling)
@@ -507,29 +583,38 @@ Pass 2c: Counts 4 studs in VIEW 2 → "dark grey 2x2 brick" (CORRECT)
 - VIEW 1 and VIEW 2 in Pass 2c are cropped correctly
 - No more coordinate system mismatch errors
 
-### Improvement 8: Temporal Context in Frame Classification
+### Improvement 8: Two-Stage Frame Selection (Pass 1a + 1b)
 **Old Behavior**:
-- Pass 1 classified frames independently
+- Single Pass 1 classified frames independently
 - Accepted frames where hands were still visible pressing down
 - Frames 0605, 0380 incorrectly classified as placement_candidate
+- No quality filtering for assembly visibility
 
-**New Behavior**:
-- Pass 1 receives frames in chronological sequence
+**New Behavior - Pass 1a (Classification)**:
+- Receives frames in chronological sequence
 - Uses temporal context: action (hands placing) → placement (hands retreated) → stable
-- PRIMARY CRITERIA: "Hands have largely RETREATED out of view"
-- Frames with hands still prominent → classified as ACTION, not placement
+- Liberal classification: prefers placement_candidate when uncertain
+- Produces initial placement_candidate list
+
+**New Behavior - Pass 1b (Quality Filtering)**:
+- Takes placement_candidates from Pass 1a
+- Filters for assembly visibility: "Can we see the main assembly clearly?"
+- Rejects frames with heavy hand obstruction
+- Assigns quality scores
 
 **Benefit**:
-- Better placement candidate detection
-- Waits for hands to retreat before capturing placement frame
-- More stable, clear images for placement analysis
+- Better placement candidate detection using temporal patterns
+- Quality filter ensures only clear, unobstructed frames proceed to Pass 2
+- Two-stage approach: liberal initial classification + strict quality filter
+- Reduces false positives and improves downstream analysis accuracy
 
 ---
 
 ## Cost Considerations
 
-- **Pass 1**: ~13-25 VLM calls (batches of 8 frames)
-- **Pass 2a**: ~0-60 VLM calls (one per placement candidate with action frames)
+- **Pass 1a**: ~13-25 VLM calls (batches of 10 frames for classification)
+- **Pass 1b**: ~10-15 VLM calls (batches of 10 placement_candidates for quality filtering)
+- **Pass 2a**: ~0-60 VLM calls (one per high-quality placement candidate with action frames)
   - Includes ALL action frames (no sampling limit)
   - Does NOT use SAM3 (original frames only)
   - Generates bounding boxes for original frames
@@ -546,11 +631,12 @@ Pass 2c: Counts 4 studs in VIEW 2 → "dark grey 2x2 brick" (CORRECT)
   - Determines when to advance to next step
 - **Pass 3**: ~1-8 VLM calls (one per manual step)
 
-**Total VLM**: ~120-183 VLM calls per video
+**Total VLM**: ~133-198 VLM calls per video
 **Total SAM3**: ~0-120 API calls (for Pass 2b segmentation)
 
 **Cost Breakdown**:
-- Pass 1: 13-25 VLM calls (frame classification)
+- Pass 1a: 13-25 VLM calls (frame classification)
+- Pass 1b: 10-15 VLM calls (quality filtering)
 - Pass 2a: 0-60 VLM calls (action analysis with bounding boxes)
 - Pass 2b: 0-60 VLM calls (SAM3 comparison with bounding boxes)
 - Pass 2c: 15 VLM calls (reconciliation)
@@ -559,7 +645,7 @@ Pass 2c: Counts 4 studs in VIEW 2 → "dark grey 2x2 brick" (CORRECT)
 - SAM3: 0-120 API calls
 
 **Trade-off**: More VLM calls than unified architecture, but better accuracy through:
-- Temporal context in Pass 1 (hands retreated detection)
+- Two-stage frame selection: Pass 1a (temporal classification) + Pass 1b (quality filtering)
 - Complete action sequences (all frames)
 - Clean SAM3 images for stud counting
 - Separate bounding boxes for original vs SAM3 frames
@@ -570,7 +656,15 @@ Pass 2c: Counts 4 studs in VIEW 2 → "dark grey 2x2 brick" (CORRECT)
 
 ## Logging and Debugging
 
-### Detailed Logs
+### Frame Classification Logs
+**Location**: `data/processed/{manual_id}/enhanced_video_{video_id}_pass1_classification.log`
+
+Logs Pass 1a and Pass 1b results:
+- **Pass 1a - Frame Classification**: Total frames analyzed, placement candidates found, action frames found
+- **Pass 1b - Quality Filtering**: Total placement candidates from Pass 1a, accepted frames, rejected frames
+- Each frame's classification, quality score, and reasoning
+
+### Placement Analysis Logs
 **Location**: `data/processed/{manual_id}/vlm_reasoning_logs_{video_id}/placement_reasoning.log`
 
 Each placement candidate shows:
@@ -648,6 +742,7 @@ uv run python test_video_enhancer_v2.py
 gemini_api_key: Optional[str] = None
 vlm_model: str = "gemini/gemini-robotics-er-1.5-preview"
 placement_min_confidence: float = 0.6
+frame_classification_batch_size: int = 10  # Frames per batch for Pass 1a and Pass 1b
 
 # Roboflow Configuration (for SAM3)
 roboflow_api_key: Optional[str] = None
@@ -663,6 +758,18 @@ SAM3 segmentation is optional:
 
 ## Troubleshooting
 
+### Too Many or Too Few Placement Candidates from Pass 1a
+1. Check Pass 1a classification logs: `enhanced_video_{video_id}_pass1_classification.log`
+2. Review temporal context: Are frames being analyzed in chronological order?
+3. Adjust batch size if needed: `frame_classification_batch_size` in settings
+4. Check reasoning for each frame classification
+
+### Pass 1b Rejecting Too Many Frames
+1. Check Pass 1b quality filtering logs
+2. Review rejected frames: Are they genuinely obscured?
+3. Check `has_hand_obstruction` and `quality_score` metrics
+4. If too strict, consider adjusting Pass 1b prompt criteria
+
 ### SAM3 Segmentation Not Working
 1. Check `ROBOFLOW_API_KEY` is set in `.env`
 2. Check SAM3 segmented frames directory exists and has images
@@ -670,7 +777,9 @@ SAM3 segmentation is optional:
 4. If Pass 2b is failing, validation will be skipped (requires SAM3)
 
 ### VLM Detections Still Wrong
-1. Check all four validation sub-passes are running:
+1. Check all validation passes are running:
+   - VLM PASS 1a - FRAME CLASSIFICATION
+   - VLM PASS 1b - QUALITY FILTERING
    - VLM PASS 2a - ACTION ANALYSIS
    - VLM PASS 2b - SAM3 COMPARISON
    - VLM PASS 2c - RECONCILIATION
@@ -702,9 +811,11 @@ This is expected! Pass 2c is designed to handle disagreements:
 
 ## Summary
 
-The three-pass architecture with SAM3 and immediate reconciliation provides:
+The multi-pass architecture with two-stage frame selection, SAM3, and immediate reconciliation provides:
 
-✅ **Temporal Context**: Pass 1 uses frame sequences to detect when hands have retreated
+✅ **Two-Stage Frame Selection**: Pass 1a (temporal classification) + Pass 1b (quality filtering) for optimal frame selection
+✅ **Temporal Context**: Pass 1a uses frame sequences to detect action → placement transitions
+✅ **Quality Filtering**: Pass 1b ensures only clear, unobstructed frames proceed to analysis
 ✅ **Separate, Focused Analysis**: Pass 2a (action), Pass 2b (visual), Pass 2c (reconciliation), Pass 2d (step completion)
 ✅ **Dual Bounding Boxes**: Pass 2a generates box for original frames, Pass 2b for SAM3 frames (correct coordinate systems)
 ✅ **Multi-Source Reconciliation**: Pass 2c reconciles THREE sources of evidence for final answer

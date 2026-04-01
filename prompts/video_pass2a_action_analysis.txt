@@ -43,12 +43,32 @@ Analyze the action sequence to determine:
 - "adjust_existing" - Hands adjust/press/reposition existing part
 - "no_action" - No meaningful action detected
 
-**BOUNDING BOX (box_2d):**
-- When a new part is being placed, provide a bounding box around the newly placed part in the CURRENT PLACEMENT FRAME (the final frame)
+**BOUNDING BOX (box_2d) - CRITICAL INSTRUCTIONS:**
+
+**Step 1: Identify placement location from ACTION FRAMES**
+- Look at the action frames and identify WHERE the hands are placing the new part
+- Track the spatial location/position where the placement is happening
+- Note visual landmarks around that location (adjacent parts, position on baseplate, etc.)
+
+**Step 2: Compare PREVIOUS vs CURRENT frames**
+- Look at the PREVIOUS PLACEMENT FRAME - memorize what parts are already there
+- Look at the CURRENT PLACEMENT FRAME - identify what's NEW (not in previous frame)
+- This helps when there are multiple similar parts visible
+
+**Step 3: Draw bounding box on CURRENT PLACEMENT FRAME**
+- Use the spatial location identified from action frames (Step 1)
+- Draw the bounding box at that SAME location in the current placement frame
+- The box should be around the part that's NEW (identified in Step 2)
 - Format: [ymin, xmin, ymax, xmax] (values 0-1000, normalized coordinates)
-- Draw a TIGHT box around the new part visible in the current placement frame
-- The box should capture the new part, even if hands are partially visible nearby
-- If no new part or if the part location is unclear, set box_2d to null
+- Draw a TIGHT box around the newly placed part only
+
+**Example scenario:**
+- If action frames show hands placing a red round brick on the RIGHT corner of the baseplate
+- Then draw the bounding box around the red round brick that's on the RIGHT corner in the current frame
+- NOT around other red bricks that may be elsewhere in the assembly
+
+**If no new part or location unclear:**
+- Set box_2d to null
 
 **OUTPUT FORMAT:**
 
@@ -59,16 +79,16 @@ Return ONLY valid JSON:
   "action_type": "place_new_part",
   "has_new_part": true,
   "part_from_actions": {
-    "description": "black tile, appears to be 1x2",
-    "color": "black",
-    "type": "tile",
-    "approximate_size": "1x2",
+    "description": "green plate, appears to be 1x4",
+    "color": "green",
+    "type": "plate",
+    "approximate_size": "1x4",
     "confidence": 0.85
   },
-  "box_2d": [350, 600, 420, 700],
-  "action_narrative": "Hands pick up a small black tile from the side and place it on top of the last grey brick in the row.",
+  "box_2d": [280, 450, 320, 650],
+  "action_narrative": "Hands pick up a green plate from the side and attach it horizontally along the left edge of the assembly.",
   "confidence": 0.9,
-  "reasoning": "Action frames show hands holding a small black tile piece. The tile has a smooth top (no visible studs). PLACEMENT CONTEXT: The tile is being placed on top of a 2x2 grey brick, and it covers approximately HALF the surface area (one column of studs). This coverage pattern indicates a 1x2 tile, not a 2x2 tile. The proportions in the hands also confirm it's a smaller 1x2 piece. Bounding box drawn around the black tile in the final placement frame."
+  "reasoning": "Action frames show hands holding a green 1x4 plate and attaching it along the LEFT edge of the baseplate. PLACEMENT CONTEXT: The plate spans 4 studs horizontally. BBOX LOCATION: Action frames show placement happening along the left edge. In the PREVIOUS frame, there was no green plate on the left edge. The CURRENT frame shows a NEW green plate at that left edge location. Bounding box drawn at that same spatial location around the newly added green plate."
 }
 ```
 
@@ -90,6 +110,8 @@ Return ONLY valid JSON:
 - Focus on understanding the ACTION from the sequence
 - Describe what you see in the hands during action frames
 - Distinguish between NEW part placement vs ADJUSTMENT of existing part
+- **For bounding box: Use action frames to identify WHERE placement happens, then draw box at that SAME location in current frame**
+- **When multiple similar parts exist: Compare previous vs current frame to identify what's NEW, use spatial location from action frames**
 - This is Pass 2a - you're analyzing the action, not the final result
 - Be conservative: if uncertain whether it's new or adjustment, describe what you see
 - Do NOT include any text before or after the JSON
