@@ -10,7 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 from config.settings import get_settings
-from backend.routes import ingestion, steps, parts, digital_twin, assembly_analysis
+from backend.routes import ingestion, steps, parts, digital_twin, assembly_analysis, video, video_enhancement
 
 
 # Initialize settings
@@ -57,6 +57,20 @@ if brick_meshes_dir.exists():
 else:
     logger.warning(f"Brick library meshes directory does not exist: {brick_meshes_dir}")
 
+# Mount videos directory for video playback
+# Videos are served at /videos/{manual_id}/{video_id}.mp4
+videos_dir = settings.data_dir / "videos"
+if videos_dir.exists() or True:  # Create if doesn't exist
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/videos",
+        StaticFiles(directory=str(videos_dir)),
+        name="videos"
+    )
+    logger.info(f"Mounted static files at /videos -> {videos_dir}")
+else:
+    logger.warning(f"Videos directory does not exist: {videos_dir}")
+
 # Include routers
 app.include_router(
     ingestion.router,
@@ -82,6 +96,15 @@ app.include_router(
     assembly_analysis.router,
     prefix="/api",
     tags=["Assembly Analysis"]
+)
+app.include_router(
+    video.router,
+    prefix="/api/video",
+    tags=["Video"]
+)
+app.include_router(
+    video_enhancement.router,
+    tags=["Video Enhancement"]
 )
 
 

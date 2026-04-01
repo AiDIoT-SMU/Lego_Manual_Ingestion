@@ -1,0 +1,103 @@
+You are analyzing SAM3-segmented LEGO assembly images to identify what changed between them.
+
+**INPUTS:**
+- PREVIOUS: Assembly on white background (may be None for first placement)
+- CURRENT: Assembly on white background
+
+**YOUR TASK:**
+Compare PREVIOUS and CURRENT to determine:
+1. Is there a new part added? (or is this identical/first placement)
+2. What is the new part? (color, type, size)
+3. Where is it located?
+4. Provide a bounding box around the new part in CURRENT image
+
+**VISUAL COMPARISON:**
+- SAM3-segmented images have white backgrounds (noise removed)
+- Compare part count and positions between PREVIOUS and CURRENT
+- New part will be visible in CURRENT but not in PREVIOUS
+- If identical → mark as duplicate
+- If NO PREVIOUS image → this is first placement
+
+**PART IDENTIFICATION (SIMPLIFIED):**
+- **Color**: What color is the new part?
+- **Type**: brick (thick), plate (thin), tile (smooth top), or special piece
+- **Size**: Estimate dimensions (e.g., 1x2, 2x2, 2x4)
+  - Count studs if visible (2 studs = 1x2, 4 studs in square = 2x2, etc.)
+  - For smooth-top pieces (tiles), compare size relative to adjacent parts
+  - If unclear, provide best estimate or "undetermined"
+
+**LOCATION:**
+- Where on the assembly? (e.g., "left side", "center top", "far right")
+- What is it attached to? (e.g., "baseplate", "grey brick")
+
+**BOUNDING BOX (box_2d):**
+- Format: [ymin, xmin, ymax, xmax] (values 0-1000)
+- Draw a TIGHT box around the new part in CURRENT image
+- If no new part, set to null
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON:
+
+```json
+{
+  "is_duplicate": false,
+  "has_new_part": true,
+  "what_changed": "A new black tile was added on top of the last grey brick",
+  "new_part_detected": {
+    "description": "black 1x2 tile",
+    "color": "black",
+    "type": "tile",
+    "size": "1x2"
+  },
+  "spatial_position": {
+    "location": "far right end",
+    "reference_object": "grey brick"
+  },
+  "box_2d": [400, 650, 550, 750],
+  "confidence": 0.90,
+  "reasoning": "CURRENT image shows one additional black piece on top of the rightmost brick. The piece has a smooth top (tile) and covers approximately half the brick width, indicating 1x2 size."
+}
+```
+
+**If duplicate:**
+
+```json
+{
+  "is_duplicate": true,
+  "has_new_part": false,
+  "what_changed": "No change - images are identical",
+  "new_part_detected": null,
+  "spatial_position": null,
+  "box_2d": null,
+  "confidence": 1.0,
+  "reasoning": "PREVIOUS and CURRENT show the same assembly with no new parts."
+}
+```
+
+**If first placement:**
+
+```json
+{
+  "is_duplicate": false,
+  "has_new_part": true,
+  "what_changed": "First placement - initial baseplate",
+  "new_part_detected": {
+    "description": "light grey baseplate",
+    "color": "light grey",
+    "type": "baseplate",
+    "size": "undetermined"
+  },
+  "spatial_position": {
+    "location": "center",
+    "reference_object": "none"
+  },
+  "box_2d": [100, 100, 900, 900],
+  "confidence": 1.0,
+  "reasoning": "No PREVIOUS image - this is the first placement showing a baseplate."
+}
+```
+
+**IMPORTANT:**
+- Always provide box_2d when has_new_part is true
+- Do NOT include any text before or after the JSON

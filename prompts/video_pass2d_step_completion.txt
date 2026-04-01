@@ -1,0 +1,86 @@
+You are performing a simple visual comparison between two LEGO assembly images.
+
+**INPUTS:**
+- CURRENT ASSEMBLY: SAM3-segmented image showing the current assembly state (white background)
+- EXPECTED SUBASSEMBLY: Reference image showing what the assembly should look like at step {step_number} completion
+
+**YOUR TASK:**
+Compare these two images visually and determine:
+1. Does the CURRENT assembly match the EXPECTED subassembly?
+2. Is the current assembly complete, incomplete, or has it progressed beyond the expected state?
+3. Should we advance to the next step?
+
+**VISUAL COMPARISON GUIDELINES:**
+
+**Matching Criteria:**
+- Compare the overall structure, part count, colors, and spatial arrangement
+- CURRENT should have the same parts in the same positions as EXPECTED
+- Minor camera angle differences are acceptable - focus on structural match, not pixel-perfect
+- Slight lighting/color variations are acceptable
+
+**Completion Assessment:**
+- **COMPLETE**: CURRENT matches EXPECTED structurally (all parts present in correct positions)
+- **INCOMPLETE**: CURRENT is missing parts that are visible in EXPECTED
+- **PROGRESSED**: CURRENT has everything from EXPECTED plus additional parts (assembly has moved ahead)
+
+**Decision Rules:**
+- If CURRENT matches EXPECTED → `is_step_complete: true`, advance to next step
+- If CURRENT is missing parts → `is_step_complete: false`, stay on current step
+- If CURRENT has extra parts → `is_step_complete: true`, advance to next step (already ahead)
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON with this structure:
+
+```json
+{
+  "is_step_complete": true,
+  "current_step_verified": 1,
+  "should_advance_to_step": 2,
+  "confidence": 0.95,
+  "reasoning": "The current assembly matches the expected state for Step 1. Both images show the same structure with identical part arrangement. Ready to advance to Step 2.",
+  "discrepancies": null
+}
+```
+
+**Example - Step INCOMPLETE:**
+
+```json
+{
+  "is_step_complete": false,
+  "current_step_verified": 1,
+  "should_advance_to_step": 1,
+  "confidence": 0.90,
+  "reasoning": "The current assembly is missing parts shown in the expected image. Expected shows 3 bricks, current only has 2. Step 1 is not yet complete.",
+  "discrepancies": {
+    "missing_parts": ["one brick on the right side"],
+    "incorrect_positions": null,
+    "extra_parts": null
+  }
+}
+```
+
+**Example - Assembly PROGRESSED:**
+
+```json
+{
+  "is_step_complete": true,
+  "current_step_verified": 1,
+  "should_advance_to_step": 2,
+  "confidence": 0.95,
+  "reasoning": "The current assembly includes all parts from the expected Step 1 state plus additional parts. Step 1 is complete and assembly has progressed beyond it.",
+  "discrepancies": {
+    "missing_parts": null,
+    "incorrect_positions": null,
+    "extra_parts": ["additional parts visible beyond Step 1 requirements"]
+  }
+}
+```
+
+**IMPORTANT:**
+- This is purely a VISUAL IMAGE COMPARISON task
+- Focus on structural similarity, not exact pixel matching
+- Accept minor angle/lighting differences
+- Describe what you see in the images
+- Be concise in your reasoning
+- Do NOT include any text before or after the JSON

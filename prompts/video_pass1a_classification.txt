@@ -1,0 +1,72 @@
+You are analyzing a TEMPORAL SEQUENCE of frames from a LEGO assembly video.
+
+The frames are shown IN CHRONOLOGICAL ORDER. Use temporal context between frames to classify each one.
+
+For EACH frame, determine:
+1. **Relevance**: Is this showing actual LEGO assembly?
+2. **Frame Type**: If relevant, is it an ACTION frame or a PLACEMENT_CANDIDATE frame?
+
+**CLASSIFICATION CRITERIA:**
+
+IRRELEVANT frames:
+- Title screens, credits, blank/black frames
+- No LEGO assembly visible
+- Camera transitions, blurry motion
+- Setup/teardown not showing assembly steps
+
+ACTION frames:
+- Hands are actively manipulating parts
+- A part is being lifted, moved, positioned, or pressed down
+- Hands are blocking/obscuring the main assembly
+- Motion blur from hands or parts moving
+- Cannot see the assembly clearly due to hands
+
+PLACEMENT_CANDIDATE frames (be LIBERAL - when in doubt, classify as placement_candidate):
+- **Part has been placed** and assembly appears stable
+- **Hands have largely retreated** from the assembly area
+- You can see the main assembly (even if hands partially visible at edges)
+- Assembly is stationary (not being actively manipulated)
+- Use temporal context: In PREVIOUS frames, hands were placing. In THIS frame, hands have retreated and assembly is visible.
+
+**Use temporal context:**
+- Look at the SEQUENCE: action (hands placing) → placement (hands retreated) → stable
+- If previous frames show active placement, and THIS frame shows assembly stable with hands mostly clear → PLACEMENT_CANDIDATE
+- If you see multiple stable frames in a row → They're likely all PLACEMENT_CANDIDATE (that's OK!)
+- **When uncertain, prefer PLACEMENT_CANDIDATE** - better to have multiple candidates than miss one
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON as an array with one entry per frame, in the SAME ORDER as the frames were shown:
+
+```json
+[
+  {
+    "is_relevant": true,
+    "frame_type": "placement_candidate",
+    "is_stable": true,
+    "confidence": 0.95,
+    "reasoning": "Part placed, hands retreated from assembly, stable view"
+  },
+  {
+    "is_relevant": true,
+    "frame_type": "action",
+    "is_stable": false,
+    "confidence": 0.9,
+    "reasoning": "Hands actively pressing part down, assembly obscured"
+  },
+  {
+    "is_relevant": false,
+    "frame_type": null,
+    "is_stable": true,
+    "confidence": 1.0,
+    "reasoning": "Title screen"
+  }
+]
+```
+
+**IMPORTANT:**
+- Return EXACTLY one entry per frame shown
+- Maintain the same order as the input frames
+- Set frame_type to null if is_relevant is false
+- **Be LIBERAL with placement_candidate** - if assembly looks stable and hands mostly clear, classify as placement_candidate
+- DO NOT include any text before or after the JSON array

@@ -1,0 +1,171 @@
+You are reconciling LEGO assembly video evidence with instruction manual steps to create ATOMIC sub-steps.
+
+**INPUTS:**
+
+1. **ENHANCED MANUAL** - Original instruction steps with expected parts
+2. **VALIDATED PLACEMENTS** - Video-verified placement actions with part identifications
+
+**YOUR TASK:**
+
+Create enhanced assembly instructions where:
+1. Each manual step is broken down into ATOMIC sub-steps
+2. ATOMIC = exactly ONE part addition per sub-step
+3. Sub-steps follow video temporal order
+4. Sub-steps include precise spatial positioning
+5. Errors/discrepancies in the manual are flagged as corrections
+
+**ENHANCED MANUAL:**
+```json
+{enhanced_json}
+```
+
+**VALIDATED PLACEMENTS:**
+```json
+{validated_placements_json}
+```
+
+**OUTPUT REQUIREMENTS:**
+
+**Sub-step Numbering:**
+- Use format: step.substep (e.g., 1.1, 1.2, 1.3)
+- Each sub-step describes exactly ONE part being added
+- If manual step says "Build a row of 4 bricks" → create sub-steps 1.1, 1.2, 1.3, 1.4
+
+**Sub-step Content:**
+Each sub-step must include:
+- **sub_step_number**: e.g., "1.1"
+- **action_description**: Clear, specific action (e.g., "Add white 2x2 brick to the left side of baseplate")
+- **placement_index**: Index from validated_placements (which video frame this corresponds to)
+- **parts_involved**: List of part descriptions (usually just 1 part per sub-step)
+- **spatial_position**: Location, reference object, orientation
+- **confidence**: How confident the video evidence is (0.0-1.0)
+
+**Corrections:**
+If video contradicts manual:
+- Wrong part: Video shows different part than manual specifies
+- Wrong position: Part placed in different location than manual shows
+- Wrong order: Parts assembled in different sequence
+- Missing step: Video shows step not in manual
+- Extra step: Manual shows step not in video
+
+**OUTPUT FORMAT:**
+
+Return ONLY valid JSON:
+
+```json
+{
+  "steps": [
+    {
+      "step_number": 1,
+      "sub_steps": [
+        {
+          "sub_step_number": "1.1",
+          "action_description": "Place grey baseplate as the foundation",
+          "placement_index": 0,
+          "parts_involved": ["grey baseplate (1x)"],
+          "spatial_position": {
+            "location": "base",
+            "reference_object": "building surface",
+            "orientation": "flat"
+          },
+          "confidence": 0.95
+        },
+        {
+          "sub_step_number": "1.2",
+          "action_description": "Add white 2x2 brick to the left side of the baseplate",
+          "placement_index": 1,
+          "parts_involved": ["white 2x2 brick (1x)"],
+          "spatial_position": {
+            "location": "left side",
+            "reference_object": "grey baseplate",
+            "orientation": "upright"
+          },
+          "confidence": 0.9
+        },
+        {
+          "sub_step_number": "1.3",
+          "action_description": "Add dark grey 2x2 brick to the right of the white brick",
+          "placement_index": 2,
+          "parts_involved": ["dark grey 2x2 brick (1x)"],
+          "spatial_position": {
+            "location": "center",
+            "reference_object": "white 2x2 brick",
+            "orientation": "upright"
+          },
+          "confidence": 0.9
+        }
+      ],
+      "corrections": []
+    },
+    {
+      "step_number": 2,
+      "sub_steps": [
+        {
+          "sub_step_number": "2.1",
+          "action_description": "Place dark gray 2x2 plate on top of the first white brick",
+          "placement_index": 5,
+          "parts_involved": ["dark gray 2x2 plate (1x)"],
+          "spatial_position": {
+            "location": "top",
+            "reference_object": "white 2x2 brick",
+            "orientation": "flat"
+          },
+          "confidence": 0.85
+        }
+      ],
+      "corrections": [
+        {
+          "type": "wrong_order",
+          "description": "Manual shows all plates placed together, but video shows them placed one at a time",
+          "evidence_placement_index": 5,
+          "confidence": 0.8
+        }
+      ]
+    }
+  ]
+}
+```
+
+**GUIDELINES:**
+
+1. **Atomic Granularity**:
+   - If manual says "Add 4 bricks" → create 4 sub-steps (1.1, 1.2, 1.3, 1.4)
+   - If manual says "Build a tower" → break it into individual part placements
+   - Each sub_step = exactly 1 part (except in rare cases where 2+ parts placed simultaneously)
+
+2. **Temporal Order**:
+   - Follow the video order (placement_index sequence)
+   - If video order differs from manual, note it in corrections
+
+3. **Part Matching & Identification**:
+   - **STRONGLY PREFER parts from the ENHANCED MANUAL** - trust the manual parts_required list unless video CLEARLY shows a different part
+   - When validated placements conflict with manual, favor the manual UNLESS you're very confident it's wrong
+   - Map validated placement parts to manual parts_required
+   - If video shows extra parts, create sub-steps anyway and flag in corrections
+
+   **CRITICAL - Accurate brick dimension identification:**
+   - COUNT THE STUDS (round bumps on top) carefully to determine size
+   - A 1x2 brick has 2 studs in a single row (rectangular, longer shape)
+   - A 2x2 brick has 4 studs in a 2x2 grid (square shape)
+   - A 2x4 brick has 8 studs in a 2x4 grid (rectangular, larger)
+   - Common mistake: confusing 1x2 (rectangular, 2 studs) with 2x2 (square, 4 studs)
+   - When video and manual parts seem similar, PREFER the manual's identification
+
+4. **Spatial Precision**:
+   - Use specific locations from validated placements
+   - Include orientation and reference objects
+   - Make instructions actionable (user should know exactly where to place)
+
+5. **Confidence**:
+   - High (0.8-1.0): Clear video evidence, exact part match
+   - Medium (0.5-0.7): Decent evidence, minor uncertainty
+   - Low (0.0-0.4): Poor video quality or ambiguous placement
+
+**IMPORTANT:**
+- **TRUST THE ENHANCED MANUAL** - only flag corrections when video CLEARLY contradicts it
+- When in doubt about part identification, use the part from manual's parts_required list
+- Count studs carefully to differentiate 1x2 vs 2x2 vs 2x4 - this is CRITICAL for accuracy
+- Do NOT skip any validated placements - every placement should become a sub-step
+- Do NOT combine multiple placements into one sub-step
+- Do NOT include text before or after the JSON
+- Maintain all original manual step metadata (parts_required, subassemblies, etc.)
