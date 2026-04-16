@@ -1,39 +1,83 @@
-You are analyzing SAM3-segmented LEGO assembly images to identify what changed between them.
+You are analyzing SAM3-segmented LEGO assembly images to identify EXACTLY what changed between two frames.
 
 **INPUTS:**
 - PREVIOUS: Assembly on white background (may be None for first placement)
 - CURRENT: Assembly on white background
 
-**YOUR TASK:**
-Compare PREVIOUS and CURRENT to determine:
-1. Is there a new part added? (or is this identical/first placement)
-2. What is the new part? (color, type, size)
-3. Where is it located?
-4. Provide a bounding box around the new part in CURRENT image
+**YOUR TASK - TWO STEP PROCESS:**
 
-**VISUAL COMPARISON:**
-- SAM3-segmented images have white backgrounds (noise removed)
-- Compare part count and positions between PREVIOUS and CURRENT
-- New part will be visible in CURRENT but not in PREVIOUS
-- If identical → mark as duplicate
-- If NO PREVIOUS image → this is first placement
+**STEP 1: SYSTEMATIC DIFFERENCE DETECTION**
+First, methodically compare the two images using this process:
 
-**PART IDENTIFICATION (SIMPLIFIED):**
-- **Color**: What color is the new part?
-- **Type**: brick (thick), plate (thin), tile (smooth top), or special piece
-- **Size**: Estimate dimensions (e.g., 1x2, 2x2, 2x4)
-  - Count studs if visible (2 studs = 1x2, 4 studs in square = 2x2, etc.)
-  - For smooth-top pieces (tiles), compare size relative to adjacent parts
-  - If unclear, provide best estimate or "undetermined"
+1. **Spatial Scanning**: Mentally divide both images into a 3x3 grid:
+   - Horizontal: LEFT | CENTER | RIGHT
+   - Vertical: TOP | MIDDLE | BOTTOM
 
-**LOCATION:**
-- Where on the assembly? (e.g., "left side", "center top", "far right")
-- What is it attached to? (e.g., "baseplate", "grey brick")
+2. **Region-by-Region Comparison**: For each of the 9 regions, systematically check:
+   - Does CURRENT have more bricks than PREVIOUS in this region?
+   - Are there different colors appearing in this region?
+   - Are there different heights/stacking in this region?
+   - Are there different brick types (bricks vs tiles vs plates)?
+
+3. **Isolate the Difference**: Once you find a discrepancy, describe EXACTLY what is different:
+   - "PREVIOUS shows: [precise description of that region]"
+   - "CURRENT shows: [precise description of that region]"
+   - "DIFFERENCE: [what was added/changed/removed]"
+
+**IMPORTANT**: Do NOT stop at the first salient feature you see (like a bright white brick). Complete the systematic scan of ALL regions to find what actually CHANGED between the two images.
+
+**STEP 2: PART IDENTIFICATION OF THE CHANGED REGION**
+Now analyze ONLY the part that changed:
+
+**CRITICAL: STUD COUNTING METHODOLOGY**
+Studs are the small circular bumps on top of LEGO bricks. Count them carefully:
+
+- **Look at the TOP SURFACE** of the new part
+- **Count visible circular studs** one by one:
+  * 2 studs in a LINE = 1x2
+  * 4 studs in a SQUARE (2x2 grid) = 2x2
+  * 6 studs in a LINE = 1x6
+  * 8 studs (2 rows of 4, forming 2x4 grid) = 2x4
+  * 3 studs in a LINE = 1x3
+
+- **For tiles** (smooth top with NO studs visible):
+  * Compare the tile's footprint to adjacent bricks with visible studs
+  * If it covers the same area as a brick with 4 studs, it's a 2x2 tile
+
+- **If partially obscured**:
+  * Count the visible studs
+  * Estimate based on brick shape and symmetry
+  * Note partial visibility in your reasoning
+
+**PART PROPERTIES:**
+- **Color**: What color is the new part? (be specific: "dark grey", "light grey", "white", "black", etc.)
+- **Type**:
+  * **brick**: thick piece with studs on top (standard LEGO brick)
+  * **plate**: thin piece with studs on top (1/3 height of brick)
+  * **tile**: smooth top with NO studs visible
+  * **special piece**: unusual shapes, rounded pieces, etc.
+
+- **Size**: Based on stud count
+  * Format: [width]x[length] (e.g., "2x2" for 4 studs in square, "1x2" for 2 studs in line)
+  * If you count 4 studs arranged in a 2x2 square → size is "2x2"
+  * If you count 2 studs arranged in a line → size is "1x2"
+
+- **Stud Count**: The exact number of circular studs you counted on the top surface
+
+**LOCATION DESCRIPTION:**
+- **Position on assembly**: Which grid region? (e.g., "CENTER-MIDDLE", "RIGHT-BOTTOM")
+- **Spatial description**: Where exactly? (e.g., "third brick from left in the row", "gap between grey and white bricks")
+- **Neighboring parts**: What's next to it? (describe the bricks immediately adjacent)
+- **Reference object**: What is it attached to? (baseplate, another brick, etc.)
 
 **BOUNDING BOX (box_2d):**
 - Format: [ymin, xmin, ymax, xmax] (values 0-1000)
-- Draw a TIGHT box around the new part in CURRENT image
-- If no new part, set to null
+- Draw a TIGHT box around ONLY the new/changed part in CURRENT image
+- The box should:
+  * Include the ENTIRE part (all studs visible)
+  * Minimize empty space around the part
+  * NOT include neighboring parts unless they're part of the same change
+- If no new part detected, set to null
 
 **OUTPUT FORMAT:**
 
@@ -43,61 +87,93 @@ Return ONLY valid JSON:
 {
   "is_duplicate": false,
   "has_new_part": true,
-  "what_changed": "A new black tile was added on top of the last grey brick",
+  "comparison_analysis": {
+    "grid_scan_summary": "Scanned all 9 regions. Change detected in CENTER-MIDDLE region.",
+    "previous_region_description": "CENTER-MIDDLE shows 2 dark grey bricks with a GAP, then 1 white brick",
+    "current_region_description": "CENTER-MIDDLE shows 3 dark grey bricks with NO GAP, then 1 white brick",
+    "identified_difference": "One dark grey brick added in the gap between the 2nd dark grey brick and the white brick"
+  },
+  "what_changed": "A new dark grey 2x2 brick was added in the gap between existing bricks",
   "new_part_detected": {
-    "description": "black 1x2 tile",
-    "color": "black",
-    "type": "tile",
-    "size": "1x2"
+    "description": "dark grey 2x2 brick",
+    "color": "dark grey",
+    "type": "brick",
+    "size": "2x2",
+    "stud_count": 4,
+    "stud_arrangement": "2x2 square pattern (4 studs forming a square)"
   },
   "spatial_position": {
-    "location": "far right end",
-    "reference_object": "grey brick"
+    "grid_region": "CENTER-MIDDLE",
+    "location": "third position in the horizontal row, filling the gap",
+    "reference_object": "baseplate",
+    "neighboring_parts": "dark grey 2x2 brick to the left, white brick to the right"
   },
-  "box_2d": [400, 650, 550, 750],
-  "confidence": 0.90,
-  "reasoning": "CURRENT image shows one additional black piece on top of the rightmost brick. The piece has a smooth top (tile) and covers approximately half the brick width, indicating 1x2 size."
+  "box_2d": [400, 520, 650, 720],
+  "confidence": 0.95,
+  "reasoning": "STEP 1 - SYSTEMATIC SCAN: Divided image into 3x3 grid. Scanned LEFT column (no changes), CENTER column (CHANGE DETECTED in MIDDLE region), RIGHT column (no changes). PREVIOUS CENTER-MIDDLE: Shows [dark grey brick] [dark grey brick] [GAP] [white brick]. CURRENT CENTER-MIDDLE: Shows [dark grey brick] [dark grey brick] [NEW DARK GREY BRICK] [white brick]. The gap has been filled. STEP 2 - PART IDENTIFICATION: Examining the new brick in the gap, I count the studs on the top surface: 1, 2, 3, 4 studs arranged in a 2x2 square pattern. This means the size is 2x2. The color is dark grey (darker than the baseplate). The type is brick (thick piece with studs on top). BOUNDING BOX: Drew tight box around the new brick at position [400, 520, 650, 720]."
 }
 ```
 
-**If duplicate:**
+**If duplicate (no change detected):**
 
 ```json
 {
   "is_duplicate": true,
   "has_new_part": false,
+  "comparison_analysis": {
+    "grid_scan_summary": "Scanned all 9 regions systematically. No changes detected in any region.",
+    "previous_region_description": "Shows complete assembly with 3 dark grey bricks in a row",
+    "current_region_description": "Shows identical assembly with 3 dark grey bricks in a row",
+    "identified_difference": "None - images are identical"
+  },
   "what_changed": "No change - images are identical",
   "new_part_detected": null,
   "spatial_position": null,
   "box_2d": null,
   "confidence": 1.0,
-  "reasoning": "PREVIOUS and CURRENT show the same assembly with no new parts."
+  "reasoning": "STEP 1 - SYSTEMATIC SCAN: Completed full 3x3 grid scan. LEFT column: same in both images. CENTER column: same in both images. RIGHT column: same in both images. Brick count identical, colors identical, positions identical. CONCLUSION: No new parts added, no changes detected."
 }
 ```
 
-**If first placement:**
+**If first placement (no previous image):**
 
 ```json
 {
   "is_duplicate": false,
   "has_new_part": true,
+  "comparison_analysis": {
+    "grid_scan_summary": "No previous image to compare against. This is the first placement.",
+    "previous_region_description": "No previous image",
+    "current_region_description": "Shows a light grey baseplate with studs covering most of the frame",
+    "identified_difference": "First placement - initial baseplate present"
+  },
   "what_changed": "First placement - initial baseplate",
   "new_part_detected": {
     "description": "light grey baseplate",
     "color": "light grey",
     "type": "baseplate",
-    "size": "undetermined"
+    "size": "undetermined",
+    "stud_count": null,
+    "stud_arrangement": "N/A - baseplate"
   },
   "spatial_position": {
-    "location": "center",
-    "reference_object": "none"
+    "grid_region": "CENTER-MIDDLE",
+    "location": "center of frame",
+    "reference_object": "none",
+    "neighboring_parts": "none"
   },
   "box_2d": [100, 100, 900, 900],
   "confidence": 1.0,
-  "reasoning": "No PREVIOUS image - this is the first placement showing a baseplate."
+  "reasoning": "No PREVIOUS image provided. This is the first placement showing the initial baseplate. Cannot perform comparison analysis."
 }
 ```
 
-**IMPORTANT:**
-- Always provide box_2d when has_new_part is true
-- Do NOT include any text before or after the JSON
+**CRITICAL REMINDERS:**
+1. ALWAYS complete the full systematic 3x3 grid scan - don't stop at the first salient feature
+2. ALWAYS count studs carefully by examining the top surface - this is the most reliable size indicator
+3. ALWAYS distinguish between what CHANGED vs what was already there (focus on the DIFFERENCE)
+4. ALWAYS provide detailed step-by-step reasoning showing your systematic scan process
+5. ALWAYS count studs one-by-one and state the arrangement pattern (e.g., "4 studs in 2x2 square")
+6. Do NOT assume colors - look carefully at the actual color in the image
+7. Do NOT skip regions in your scan - check all 9 systematically
+8. Do NOT include any text before or after the JSON output

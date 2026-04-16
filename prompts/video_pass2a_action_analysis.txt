@@ -85,10 +85,10 @@ Return ONLY valid JSON:
     "approximate_size": "1x4",
     "confidence": 0.85
   },
-  "box_2d": [280, 450, 320, 650],
   "action_narrative": "Hands pick up a green plate from the side and attach it horizontally along the left edge of the assembly.",
   "confidence": 0.9,
-  "reasoning": "Action frames show hands holding a green 1x4 plate and attaching it along the LEFT edge of the baseplate. PLACEMENT CONTEXT: The plate spans 4 studs horizontally. BBOX LOCATION: Action frames show placement happening along the left edge. In the PREVIOUS frame, there was no green plate on the left edge. The CURRENT frame shows a NEW green plate at that left edge location. Bounding box drawn at that same spatial location around the newly added green plate."
+  "reasoning": "Action frames show hands placing a green 1x4 plate at the LEFT edge of the baseplate. PREVIOUS frame had no green plate on the left edge. CURRENT frame shows a NEW green plate there. It is the leftmost piece in the assembly, to the left of the existing white brick. Normalized position: approximately xmin=650, xmax=750, ymin=280, ymax=320.",
+  "box_2d": [280, 650, 320, 750]
 }
 ```
 
@@ -99,10 +99,10 @@ Return ONLY valid JSON:
   "action_type": "adjust_existing",
   "has_new_part": false,
   "part_from_actions": null,
-  "box_2d": null,
   "action_narrative": "Hands press down on the existing dark grey brick to ensure it's seated properly.",
   "confidence": 1.0,
-  "reasoning": "Action frames show hands pressing on a brick that was already present in the previous placement frame. No new part is being added - this is just ensuring the existing part is secure."
+  "reasoning": "Action frames show hands pressing on a brick already present in the previous frame. No new part added.",
+  "box_2d": null
 }
 ```
 
@@ -110,8 +110,8 @@ Return ONLY valid JSON:
 - Focus on understanding the ACTION from the sequence
 - Describe what you see in the hands during action frames
 - Distinguish between NEW part placement vs ADJUSTMENT of existing part
-- **For bounding box: Use action frames to identify WHERE placement happens, then draw box at that SAME location in current frame**
-- **When multiple similar parts exist: Compare previous vs current frame to identify what's NEW, use spatial location from action frames**
+- **`reasoning` comes before `box_2d` — the coordinates must follow from the location you describe in reasoning, not the other way around**
+- **When multiple similar parts exist: in the reasoning, identify which specific instance is new (e.g., "the rightmost one", "the one to the right of the last dark grey brick") before writing coordinates**
 - This is Pass 2a - you're analyzing the action, not the final result
 - Be conservative: if uncertain whether it's new or adjustment, describe what you see
 - Do NOT include any text before or after the JSON
