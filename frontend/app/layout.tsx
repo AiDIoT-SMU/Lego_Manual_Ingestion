@@ -37,24 +37,6 @@ export default function RootLayout({
             >
               Parts
             </a>
-            <a
-              href="/digital-twin"
-              className="text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              Digital Twin
-            </a>
-            <a
-              href="/assembly-analysis"
-              className="text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              Analysis
-            </a>
-            <a
-              href="/video-verify"
-              className="text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              Video Verify
-            </a>
           </div>
         </nav>
         <main className="max-w-5xl mx-auto px-6 py-10">{children}</main>
