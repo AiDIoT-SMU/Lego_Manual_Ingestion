@@ -46,7 +46,11 @@ data/ldraw_library/
 data/videos/
 
 # Test artifacts
+tests/
 tests/output/
+test_*.py
+*.test.py
+.pytest_cache/
 
 # Frontend
 frontend/node_modules/
@@ -56,7 +60,22 @@ frontend/out/
 # IDE
 .cursor/
 .vscode/
+.claude/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Backup and temporary files
+*.bak
+*.tmp
+*.swp
+*~
+
+# Archived/experimental (removed from repo)
+archive/
+validation/
+docs/
+backend/test/
+data/analysis_runs/
+data/changi/
