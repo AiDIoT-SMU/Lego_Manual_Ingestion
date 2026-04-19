@@ -1,6 +1,10 @@
 """
+EXPERIMENTAL FEATURE
+
 LDraw File Parser.
 Parses .ldr files and extracts part instances with transformations.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from pathlib import Path

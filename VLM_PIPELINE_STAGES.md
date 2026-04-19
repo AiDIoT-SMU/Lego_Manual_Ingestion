@@ -190,11 +190,11 @@ The video enhancement pipeline uses **7 VLM call stages** to transform raw assem
 **Location**: `_pass2b_sam3_comparison()`
 **Prompt**: `prompts/video_pass2b_sam3_comparison.txt`
 
-**Purpose**: Compare SAM3-segmented images to identify what changed:
-- Is there a new part added, or is this the same assembly state?
-- What is the new part? (color, type, size, stud count)
-- Where is the new part located?
+**Purpose**: Compare SAM3-segmented images to identify what changed using a **two-step systematic process**:
+- **Step 1**: Systematically scan all regions (3x3 grid) to identify what changed
+- **Step 2**: Analyze the changed region to identify the part (color, type, size, stud count)
 - Bounding box around the new part
+- **INDEPENDENT from Pass 2a** - provides unbiased visual analysis for Pass 2c reconciliation
 
 **Input (Multimodal - 2 Images Only)**:
 1. **Previous Placement (SAM3 segmented)**
@@ -203,6 +203,7 @@ The video enhancement pipeline uses **7 VLM call stages** to transform raw assem
    - Assembly cropped on white background
 
 **NO action frames** - This pass only compares the before/after assembly states
+**NO Pass 2a hints** - Remains completely independent to avoid bias
 
 **SAM3 Segmentation**:
 - Runs Roboflow SAM3 API with prompt: `"lego assembly"`
@@ -213,38 +214,65 @@ The video enhancement pipeline uses **7 VLM call stages** to transform raw assem
 - Falls back to original images if SAM3 fails or API key not set
 - **Why white background?** Eliminates distractions and focuses VLM on stud counting
 
+**Two-Step Systematic Process**:
+1. **Spatial Scanning**: Divides images into 3x3 grid (LEFT/CENTER/RIGHT × TOP/MIDDLE/BOTTOM)
+2. **Region-by-Region Comparison**: Checks each of 9 regions for changes
+3. **Isolate Difference**: Describes "PREVIOUS shows X, CURRENT shows Y, DIFFERENCE is Z"
+4. **Part Identification**: Counts studs on the changed part (4 studs in 2x2 grid = 2x2 size)
+
 **Output**:
 ```json
 {
   "is_duplicate": false,
   "has_new_part": true,
-  "what_changed": "A new dark grey 2x2 brick was added to the left side of the baseplate",
+  "comparison_analysis": {
+    "grid_scan_summary": "Scanned all 9 regions. Change detected in CENTER-MIDDLE region.",
+    "previous_region_description": "CENTER-MIDDLE shows 2 dark grey bricks with a GAP, then 1 white brick",
+    "current_region_description": "CENTER-MIDDLE shows 3 dark grey bricks with NO GAP, then 1 white brick",
+    "identified_difference": "One dark grey brick added in the gap between the 2nd dark grey brick and the white brick"
+  },
+  "what_changed": "A new dark grey 2x2 brick was added in the gap between existing bricks",
   "new_part_detected": {
     "description": "dark grey 2x2 brick",
     "color": "dark grey",
     "type": "brick",
     "size": "2x2",
-    "stud_count": 4
+    "stud_count": 4,
+    "stud_arrangement": "2x2 square pattern (4 studs forming a square)"
   },
   "spatial_position": {
-    "location": "left side",
-    "reference_object": "grey baseplate",
-    "orientation": "upright"
+    "grid_region": "CENTER-MIDDLE",
+    "location": "third position in the horizontal row, filling the gap",
+    "reference_object": "baseplate",
+    "neighboring_parts": "dark grey 2x2 brick to the left, white brick to the right"
   },
-  "box_2d": [400, 100, 650, 300],
+  "box_2d": [400, 520, 650, 720],
   "confidence": 0.95,
-  "reasoning": "PREVIOUS image shows baseplate with 2 white bricks. CURRENT image shows baseplate with 2 white bricks PLUS one additional dark grey brick on the left side. STUD COUNT: 4 studs in 2x2 grid."
+  "reasoning": "STEP 1 - SYSTEMATIC SCAN: Divided image into 3x3 grid. Scanned LEFT column (no changes), CENTER column (CHANGE DETECTED in MIDDLE region), RIGHT column (no changes). PREVIOUS CENTER-MIDDLE: Shows [dark grey brick] [dark grey brick] [GAP] [white brick]. CURRENT CENTER-MIDDLE: Shows [dark grey brick] [dark grey brick] [NEW DARK GREY BRICK] [white brick]. The gap has been filled. STEP 2 - PART IDENTIFICATION: Examining the new brick in the gap, I count the studs on the top surface: 1, 2, 3, 4 studs arranged in a 2x2 square pattern. This means the size is 2x2. The color is dark grey. The type is brick. BOUNDING BOX: Drew tight box around the new brick at position [400, 520, 650, 720]."
 }
 ```
 
 **Key Features**:
-- **CRITICAL**: Counts studs to determine size (2 studs = 1x2, 4 studs = 2x2)
+- ✅ **Two-Step Structured Process**: Compare systematically, then identify the changed part
+- ✅ **Spatial Grid Scanning**: 3x3 grid ensures all regions are checked (prevents missing changes)
+- ✅ **Explicit Stud Counting**: Detailed methodology (2 studs in line = 1x2, 4 studs in square = 2x2)
+- ✅ **Chain-of-Thought Reasoning**: Shows systematic scan process in reasoning field
+- ✅ **Comparison Analysis Field**: New structured field shows region descriptions and difference
+- ✅ **Independent Analysis**: No Pass 2a hints - provides unbiased perspective for Pass 2c
 - Clean SAM3 images improve stud counting accuracy
 - Focuses on visual comparison, not action understanding
 - Determines duplicate status (if no change detected)
 - **Generates bounding box (box_2d)** for the new part in the CURRENT SAM3 FRAME
   - Coordinates are for the SAM3-segmented frame (not original)
   - Used for annotating SAM3 frames and cropping for Pass 2c
+
+**Improvements from Previous Version**:
+- Now uses two-step structured comparison (prevents jumping to conclusions)
+- Systematic 3x3 grid scanning (prevents missing changes in gaps or subtle regions)
+- Explicit stud counting instructions (reduces 1x2 vs 2x2 errors)
+- Chain-of-thought reasoning (shows scan process for debugging)
+- New `comparison_analysis` field (provides detailed region descriptions)
+- Remains independent from Pass 2a (unbiased for reconciliation)
 
 ---
 

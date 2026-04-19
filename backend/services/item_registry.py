@@ -1,10 +1,14 @@
 """
+EXPERIMENTAL FEATURE
+
 Item registry for consensus-analysis dashboard workflow.
 
 Discovers build items from the repository's root `data/` directory.
 Each item is resolved from:
 1) `data/<item>/config.json` (preferred), or
 2) fallback folder conventions.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from __future__ import annotations

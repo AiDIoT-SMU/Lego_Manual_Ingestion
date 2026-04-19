@@ -1,4 +1,6 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Enhancer V2: Improved 4-pass pipeline with quality filtering and context awareness.
 
 Four VLM call pipeline:
@@ -6,6 +8,8 @@ Four VLM call pipeline:
 2. Placement Validation: Context-aware analysis using enhanced.json parts list + duplicate detection.
 3. Per-Placement Reconciliation: Individual VLM calls for each placement to verify against expected parts using annotated frames + reference images.
 4. Atomic Sub-steps: Generate 1-part-per-sub-step instructions with spatial positioning from reconciled placements.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import io
@@ -1544,6 +1548,16 @@ class VideoEnhancerV2:
                         log_file.write(f"    Current: SAM3 failed\n")
                     if sam3_annotated:
                         log_file.write(f"    Annotated (SAM3 with bbox): {sam3_annotated}\n")
+
+                    # Log comparison analysis (new structured field)
+                    comparison_analysis = pass2b_result.get('comparison_analysis', {})
+                    if comparison_analysis:
+                        log_file.write(f"\n  Systematic Comparison Analysis:\n")
+                        log_file.write(f"    Grid Scan: {comparison_analysis.get('grid_scan_summary', 'N/A')}\n")
+                        log_file.write(f"    Previous Region: {comparison_analysis.get('previous_region_description', 'N/A')}\n")
+                        log_file.write(f"    Current Region: {comparison_analysis.get('current_region_description', 'N/A')}\n")
+                        log_file.write(f"    Identified Difference: {comparison_analysis.get('identified_difference', 'N/A')}\n")
+
                     log_file.write(f"\n  VLM Output:\n")
                     log_file.write(f"    is_duplicate: {pass2b_result.get('is_duplicate', False)}\n")
                     log_file.write(f"    has_new_part: {pass2b_result.get('has_new_part', False)}\n")

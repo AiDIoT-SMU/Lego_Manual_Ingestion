@@ -1,6 +1,10 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Processor: Extracts frames from uploaded assembly videos.
 Uses OpenCV to extract frames at specified intervals for VLM analysis.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import cv2

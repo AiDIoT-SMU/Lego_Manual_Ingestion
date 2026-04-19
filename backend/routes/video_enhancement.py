@@ -1,7 +1,11 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Enhancement API Routes: Endpoints for video-enhanced assembly instructions.
 
 Provides endpoints to trigger video enhancement, retrieve enhanced steps, and list enhancements.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Form, File, UploadFile

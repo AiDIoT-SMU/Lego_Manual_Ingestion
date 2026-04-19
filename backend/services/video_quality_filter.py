@@ -1,7 +1,11 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Quality Filter: Detects blur, hand obstruction, and frame stability.
 
 Uses computer vision (OpenCV) for fast quality metrics before sending frames to VLM.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import cv2

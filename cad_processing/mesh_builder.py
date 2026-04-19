@@ -1,6 +1,10 @@
 """
+EXPERIMENTAL FEATURE
+
 Mesh Builder.
 Loads LDraw part geometries and builds combined meshes.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from pathlib import Path

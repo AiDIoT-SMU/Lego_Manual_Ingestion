@@ -1,9 +1,13 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Analyzer: Verifies user assembly videos against ground truth.
 
 Uses 2 VLM call types:
 1. Step Detection + Placement Detection: Identify current step and if this is a placement frame
 2. Verification (conditional): Verify part and spatial placement against ground truth
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import io

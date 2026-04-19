@@ -1,5 +1,9 @@
 """
+EXPERIMENTAL FEATURE
+
 Digital Twin Routes: API endpoints for accessing digital twin data.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from fastapi import APIRouter, HTTPException
