@@ -1,5 +1,9 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Routes: API endpoints for video upload and assembly verification.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException

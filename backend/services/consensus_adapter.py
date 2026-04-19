@@ -1,9 +1,13 @@
 """
+EXPERIMENTAL FEATURE
+
 Consensus parser + timeline adapter extracted from BuildGuide renderer logic.
 
 These helpers keep behavior parity with:
 `eval/render_video_consensus.py`
 without rendering overlays onto frames.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from __future__ import annotations

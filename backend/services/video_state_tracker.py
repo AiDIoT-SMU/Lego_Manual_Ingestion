@@ -1,5 +1,9 @@
 """
+EXPERIMENTAL FEATURE
+
 Video State Tracker: Tracks subassembly switches during assembly.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from typing import Any, Optional, Set

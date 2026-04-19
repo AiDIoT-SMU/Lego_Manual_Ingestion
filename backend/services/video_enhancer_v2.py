@@ -1,4 +1,6 @@
 """
+EXPERIMENTAL FEATURE
+
 Video Enhancer V2: Improved 4-pass pipeline with quality filtering and context awareness.
 
 Four VLM call pipeline:
@@ -6,6 +8,8 @@ Four VLM call pipeline:
 2. Placement Validation: Context-aware analysis using enhanced.json parts list + duplicate detection.
 3. Per-Placement Reconciliation: Individual VLM calls for each placement to verify against expected parts using annotated frames + reference images.
 4. Atomic Sub-steps: Generate 1-part-per-sub-step instructions with spatial positioning from reconciled placements.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import io

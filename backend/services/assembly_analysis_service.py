@@ -1,5 +1,9 @@
 """
+EXPERIMENTAL FEATURE
+
 Orchestrates item-driven consensus analysis for dashboard workflows.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from __future__ import annotations

@@ -1,5 +1,9 @@
 """
+EXPERIMENTAL FEATURE
+
 Assembly analysis routes for consensus workflow dashboard.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 from __future__ import annotations

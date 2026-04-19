@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
+EXPERIMENTAL FEATURE
+
 Build a library of 3D models for unique LEGO parts.
 Process each unique part once, then reuse for efficiency.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import json

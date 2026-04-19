@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
+EXPERIMENTAL FEATURE
+
 Visualize the digital twin assembly - similar to LEGO Studio.
 Loads meshes for each brick and displays them with proper positioning.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import json

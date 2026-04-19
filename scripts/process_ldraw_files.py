@@ -1,5 +1,9 @@
 """
+EXPERIMENTAL FEATURE
+
 Process LDraw files to generate meshes and point clouds.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import sys

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
+EXPERIMENTAL FEATURE
+
 Build digital twin database with per-brick identification.
 Maps each brick instance to its library geometry + pose.
+
+NOTE: This is an experimental feature and is not part of the main VLM pipeline.
 """
 
 import json
