@@ -139,11 +139,14 @@ lego_assembler/
 │   ├── image_cropper.py   # Bounding box cropping
 │   └── schemas.py         # Data models
 ├── scripts/                # Utility scripts
-├── data/                   # Generated data
-│   ├── manuals/           # Uploaded PDFs and images
-│   ├── processed/         # JSON outputs
-│   └── cropped/           # Cropped images
-└── tests/                 # Test suite
+│   ├── check_available_gemini_models.py
+│   └── clear_ingestion.py
+├── config/                 # Configuration
+│   └── settings.py
+└── data/                   # Generated data
+    ├── manuals/           # Uploaded PDFs and images
+    ├── processed/         # JSON outputs
+    └── cropped/           # Cropped images
 ```
 
 ## Data Flow
@@ -209,15 +212,17 @@ DATA_DIR=./data
 
 ## Development
 
-### Running Tests
-```bash
-uv run pytest tests/
-```
-
 ### Code Structure
 - **Modular design**: Separation of concerns across modules
 - **Type safety**: Pydantic models for data validation
 - **Clean architecture**: API, business logic, and data processing layers
+
+### Project Organization
+- `backend/` - FastAPI server and API routes
+- `frontend/` - Next.js web application
+- `ingestion/` - Core VLM extraction pipeline
+- `config/` - Application configuration
+- `prompts/` - VLM prompt templates
 
 ## Key Features Explained
 
